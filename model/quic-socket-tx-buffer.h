@@ -112,6 +112,7 @@ public:
   Time m_firstSentTime { Seconds (0) };      //!< Connection's first sent time at the time the packet was sent
   bool m_isAppLimited { false };       //!< Connection's app limited at the time the packet was sent
   uint32_t m_ackBytesSent { 0 };       //!< Connection's ACK-only bytes sent at the time the packet was sent
+  uint32_t m_wireSize { 0 };           //!< Full wire size (including headers)
 };
 
 /**
@@ -202,7 +203,7 @@ public:
    *
    * \return a vector containing the packets marked as lost
    */
-  std::vector<Ptr<QuicSocketTxItem> > DetectLostPackets ();
+  std::vector<Ptr<QuicSocketTxItem> > DetectLostPackets (Ptr<TcpSocketState> tcb);
 
   /**
    * \brief Count the amount of lost bytes
@@ -226,11 +227,25 @@ public:
   uint32_t AppSize (void) const;
 
   /**
-   * \brief Return total bytes in flight
+   * \brief Return total bytes in flight (all retransmittable packets)
    *
    * \returns total bytes in flight
    */
   uint32_t BytesInFlight () const;
+
+  /**
+   * \brief Return bytes in flight subject to congestion control (excluding Initial/Handshake)
+   *
+   * \returns congestion controlled bytes in flight
+   */
+  uint32_t GetCongestionControlledBytesInFlight () const;
+
+  /**
+    * \brief Return bytes in flight for Handshake/Initial packets
+    *
+    * \returns handshake bytes in flight
+    */
+  uint32_t GetHandshakeInFlight () const;
 
   /**
    * Return the number of frames for stream 0 is in the buffer

@@ -4,7 +4,7 @@
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation;
+ * published by the Free Software Foundation; 
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -141,7 +141,7 @@ QuicHeaderTestCase::TestQuicHeaderSerializeDeserialize ()
       SequenceNumber32 packetNumber = SequenceNumber32(GET_RANDOM_UINT32 (x));
       std::vector<uint32_t> supportedVersions;
 
-      for ( int h_case = QuicHeader::VERSION_NEGOTIATION; 
+      for ( int h_case = QuicHeader::INITIAL; 
         h_case != QuicHeader::NONE; h_case++ )
         {
           switch ( h_case )
@@ -149,8 +149,8 @@ QuicHeaderTestCase::TestQuicHeaderSerializeDeserialize ()
               case QuicHeader::VERSION_NEGOTIATION: // TODO: Update when full supported
                   head = QuicHeader::CreateVersionNegotiation (connectionId, version, supportedVersions);
 
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 17, 
-                    "QuicHeader for Long Packet is not 17 word");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 15, 
+                    "QuicHeader for Version Negotiation is not 15 bytes");
 
                   buffer.AddAtStart (head.GetSerializedSize ());
                   head.Serialize (buffer.Begin ());
@@ -159,12 +159,12 @@ QuicHeaderTestCase::TestQuicHeaderSerializeDeserialize ()
                                              "Different format found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetTypeByte (), QuicHeader::VERSION_NEGOTIATION,
                                              "Different type byte found");
-                  NS_TEST_ASSERT_MSG_EQ (connectionId, head.GetConnectionId (),
+                  NS_TEST_ASSERT_MSG_EQ (connectionId, head.GetConnectionId (), 
                                              "Different connection id found");
                   NS_TEST_ASSERT_MSG_EQ (version, head.GetVersion (),
                                              "Different version found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 17, 
-                    "QuicHeader for Long Packet is not 17 word");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 15, 
+                    "QuicHeader for Version Negotiation is not 15 bytes");
 
                   copyHead.Deserialize (buffer.Begin ());
 
@@ -172,18 +172,18 @@ QuicHeaderTestCase::TestQuicHeaderSerializeDeserialize ()
                                              "Different format found in deserialized header");
                   NS_TEST_ASSERT_MSG_EQ (head.GetTypeByte (), QuicHeader::VERSION_NEGOTIATION,
                                          "Different type byte found in deserialized header");
-                  NS_TEST_ASSERT_MSG_EQ (connectionId, copyHead.GetConnectionId (),
+                  NS_TEST_ASSERT_MSG_EQ (connectionId, copyHead.GetConnectionId (), 
                                              "Different connection id found in deserialized header");
                   NS_TEST_ASSERT_MSG_EQ (version, copyHead.GetVersion (),
                                              "Different version found in deserialized header");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), 17, 
-                    "QuicHeader for Long Packet is not 17 word in deserialized header"); 
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), 15, 
+                    "QuicHeader for Version Negotiation is not 15 bytes in deserialized header"); 
                   break;
               case QuicHeader::INITIAL:
                   head = QuicHeader::CreateInitial (connectionId, version, packetNumber);
 
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 17, 
-                    "QuicHeader for Long Packet is not 17 word");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 19, 
+                    "QuicHeader for INITIAL Packet is not 19 bytes");
 
                   buffer.AddAtStart (head.GetSerializedSize ());
                   head.Serialize (buffer.Begin ());
@@ -196,10 +196,10 @@ QuicHeaderTestCase::TestQuicHeaderSerializeDeserialize ()
                                              "Different connection id found");
                   NS_TEST_ASSERT_MSG_EQ (version, head.GetVersion (),
                                              "Different version found");
-                  NS_TEST_ASSERT_MSG_EQ (packetNumber, head.GetPacketNumber (),
+                  NS_TEST_ASSERT_MSG_EQ (packetNumber, head.GetPacketNumber (), 
                                              "Different packet number found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 17, 
-                    "QuicHeader for Long Packet is not 17 word");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 19, 
+                    "QuicHeader for INITIAL Packet is not 19 bytes");
 
                   copyHead.Deserialize (buffer.Begin ());
 
@@ -207,20 +207,20 @@ QuicHeaderTestCase::TestQuicHeaderSerializeDeserialize ()
                                              "Different format found in deserialized header");
                   NS_TEST_ASSERT_MSG_EQ (head.GetTypeByte (), QuicHeader::INITIAL,
                                          "Different type byte found in deserialized header");
-                  NS_TEST_ASSERT_MSG_EQ (connectionId, copyHead.GetConnectionId (),
+                  NS_TEST_ASSERT_MSG_EQ (connectionId, copyHead.GetConnectionId (), 
                                              "Different connection id found in deserialized header");
                   NS_TEST_ASSERT_MSG_EQ (version, copyHead.GetVersion (),
                                              "Different version found in deserialized header");
-                  NS_TEST_ASSERT_MSG_EQ (packetNumber, copyHead.GetPacketNumber (),
+                  NS_TEST_ASSERT_MSG_EQ (packetNumber, copyHead.GetPacketNumber (), 
                                              "Different packet number found in deserialized header");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), 17, 
-                    "QuicHeader for Long Packet is not 17 word in deserialized header"); 
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), 19, 
+                    "QuicHeader for INITIAL Packet is not 19 bytes in deserialized header"); 
                   break;
               case QuicHeader::RETRY:
                   head = QuicHeader::CreateRetry (connectionId, version, packetNumber);
 
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 17, 
-                    "QuicHeader for Long Packet is not 17 word");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 19, 
+                    "QuicHeader for RETRY Packet is not 19 bytes");
 
                   buffer.AddAtStart (head.GetSerializedSize ());
                   head.Serialize (buffer.Begin ());
@@ -229,14 +229,14 @@ QuicHeaderTestCase::TestQuicHeaderSerializeDeserialize ()
                                              "Different format found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetTypeByte (), QuicHeader::RETRY,
                                              "Different type byte found");
-                  NS_TEST_ASSERT_MSG_EQ (connectionId, head.GetConnectionId (),
+                  NS_TEST_ASSERT_MSG_EQ (connectionId, head.GetConnectionId (), 
                                              "Different connection id found");
                   NS_TEST_ASSERT_MSG_EQ (version, head.GetVersion (),
                                              "Different version found");
-                  NS_TEST_ASSERT_MSG_EQ (packetNumber, head.GetPacketNumber (),
+                  NS_TEST_ASSERT_MSG_EQ (packetNumber, head.GetPacketNumber (), 
                                              "Different packet number found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 17, 
-                    "QuicHeader for Long Packet is not 17 word");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 19, 
+                    "QuicHeader for RETRY Packet is not 19 bytes");
 
                   copyHead.Deserialize (buffer.Begin ());
 
@@ -244,20 +244,20 @@ QuicHeaderTestCase::TestQuicHeaderSerializeDeserialize ()
                                              "Different format found in deserialized header");
                   NS_TEST_ASSERT_MSG_EQ (head.GetTypeByte (), QuicHeader::RETRY,
                                          "Different type byte found in deserialized header");
-                  NS_TEST_ASSERT_MSG_EQ (connectionId, copyHead.GetConnectionId (),
+                  NS_TEST_ASSERT_MSG_EQ (connectionId, copyHead.GetConnectionId (), 
                                              "Different connection id found in deserialized header");
                   NS_TEST_ASSERT_MSG_EQ (version, copyHead.GetVersion (),
                                              "Different version found in deserialized header");
-                  NS_TEST_ASSERT_MSG_EQ (packetNumber, copyHead.GetPacketNumber (),
+                  NS_TEST_ASSERT_MSG_EQ (packetNumber, copyHead.GetPacketNumber (), 
                                              "Different packet number found in deserialized header");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), 17, 
-                    "QuicHeader for Long Packet is not 17 word in deserialized header"); 
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), 19, 
+                    "QuicHeader for RETRY Packet is not 19 bytes in deserialized header"); 
                   break;
               case QuicHeader::HANDSHAKE:
                   head = QuicHeader::CreateHandshake (connectionId, version, packetNumber);
 
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 17, 
-                    "QuicHeader for Long Packet is not 17 word");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 19, 
+                    "QuicHeader for HANDSHAKE Packet is not 19 bytes");
 
                   buffer.AddAtStart (head.GetSerializedSize ());
                   head.Serialize (buffer.Begin ());
@@ -266,14 +266,14 @@ QuicHeaderTestCase::TestQuicHeaderSerializeDeserialize ()
                                              "Different format found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetTypeByte (), QuicHeader::HANDSHAKE,
                                              "Different type byte found");
-                  NS_TEST_ASSERT_MSG_EQ (connectionId, head.GetConnectionId (),
+                  NS_TEST_ASSERT_MSG_EQ (connectionId, head.GetConnectionId (), 
                                              "Different connection id found");
                   NS_TEST_ASSERT_MSG_EQ (version, head.GetVersion (),
                                              "Different version found");
-                  NS_TEST_ASSERT_MSG_EQ (packetNumber, head.GetPacketNumber (),
+                  NS_TEST_ASSERT_MSG_EQ (packetNumber, head.GetPacketNumber (), 
                                              "Different packet number found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 17, 
-                    "QuicHeader for Long Packet is not 17 word");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 19, 
+                    "QuicHeader for HANDSHAKE Packet is not 19 bytes");
 
                   copyHead.Deserialize (buffer.Begin ());
 
@@ -281,58 +281,58 @@ QuicHeaderTestCase::TestQuicHeaderSerializeDeserialize ()
                                              "Different format found in deserialized header");
                   NS_TEST_ASSERT_MSG_EQ (head.GetTypeByte (), QuicHeader::HANDSHAKE,
                                          "Different type byte found in deserialized header");
-                  NS_TEST_ASSERT_MSG_EQ (connectionId, copyHead.GetConnectionId (),
+                  NS_TEST_ASSERT_MSG_EQ (connectionId, copyHead.GetConnectionId (), 
                                              "Different connection id found in deserialized header");
                   NS_TEST_ASSERT_MSG_EQ (version, copyHead.GetVersion (),
                                              "Different version found in deserialized header");
-                  NS_TEST_ASSERT_MSG_EQ (packetNumber, copyHead.GetPacketNumber (),
+                  NS_TEST_ASSERT_MSG_EQ (packetNumber, copyHead.GetPacketNumber (), 
                                              "Different packet number found in deserialized header");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), 17, 
-                    "QuicHeader for Long Packet is not 17 word in deserialized header"); 
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), 19, 
+                    "QuicHeader for HANDSHAKE Packet is not 19 bytes in deserialized header"); 
                   break;
-              case QuicHeader::ZRTT_PROTECTED:
+              case QuicHeader::ZERO_RTT:
                   head = QuicHeader::Create0RTT (connectionId, version, packetNumber);
 
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 17, 
-                    "QuicHeader for Long Packet is not 17 word");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 19, 
+                    "QuicHeader for ZERO_RTT Packet is not 19 bytes");
 
                   buffer.AddAtStart (head.GetSerializedSize ());
                   head.Serialize (buffer.Begin ());
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetFormat (), QuicHeader::LONG,
                                              "Different format found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetTypeByte (), QuicHeader::ZRTT_PROTECTED,
+                  NS_TEST_ASSERT_MSG_EQ (head.GetTypeByte (), QuicHeader::ZERO_RTT,
                                              "Different type byte found");
-                  NS_TEST_ASSERT_MSG_EQ (connectionId, head.GetConnectionId (),
+                  NS_TEST_ASSERT_MSG_EQ (connectionId, head.GetConnectionId (), 
                                              "Different connection id found");
                   NS_TEST_ASSERT_MSG_EQ (version, head.GetVersion (),
                                              "Different version found");
-                  NS_TEST_ASSERT_MSG_EQ (packetNumber, head.GetPacketNumber (),
+                  NS_TEST_ASSERT_MSG_EQ (packetNumber, head.GetPacketNumber (), 
                                              "Different packet number found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 17, 
-                    "QuicHeader for Long Packet is not 17 word");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 19, 
+                    "QuicHeader for ZERO_RTT Packet is not 19 bytes");
 
                   copyHead.Deserialize (buffer.Begin ());
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetFormat (), QuicHeader::LONG,
                                              "Different format found in deserialized header");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetTypeByte (), QuicHeader::ZRTT_PROTECTED,
+                  NS_TEST_ASSERT_MSG_EQ (head.GetTypeByte (), QuicHeader::ZERO_RTT,
                                          "Different type byte found in deserialized header");
-                  NS_TEST_ASSERT_MSG_EQ (connectionId, copyHead.GetConnectionId (),
+                  NS_TEST_ASSERT_MSG_EQ (connectionId, copyHead.GetConnectionId (), 
                                              "Different connection id found in deserialized header");
                   NS_TEST_ASSERT_MSG_EQ (version, copyHead.GetVersion (),
                                              "Different version found in deserialized header");
-                  NS_TEST_ASSERT_MSG_EQ (packetNumber, copyHead.GetPacketNumber (),
+                  NS_TEST_ASSERT_MSG_EQ (packetNumber, copyHead.GetPacketNumber (), 
                                              "Different packet number found in deserialized header");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), 17, 
-                    "QuicHeader for Long Packet is not 17 word in deserialized header"); 
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), 19, 
+                    "QuicHeader for ZERO_RTT Packet is not 19 bytes in deserialized header"); 
                   break;
                default:
                   break;
           }
         }
         
-        bool connectionIdFlag = (i % 2 == 0) ? true : false;
+        bool connectionIdFlag = true; // Always true for ns-3 RFC 9000 short headers
         bool keyPhaseBit = (i % 2 == 0) ? QuicHeader::PHASE_ZERO : QuicHeader::PHASE_ONE;
 
         head = QuicHeader::CreateShort (connectionId, packetNumber, connectionIdFlag, keyPhaseBit);
@@ -347,7 +347,7 @@ QuicHeaderTestCase::TestQuicHeaderSerializeDeserialize ()
                                    "Different format found");
         NS_TEST_ASSERT_MSG_EQ (head.GetKeyPhaseBit (), keyPhaseBit,
                                    "Different key phase bit found");
-        NS_TEST_ASSERT_MSG_EQ (packetNumber, head.GetPacketNumber (),
+        NS_TEST_ASSERT_MSG_EQ (packetNumber, head.GetPacketNumber (), 
                                    "Different packet number found");        
         if (connectionIdFlag) {
           NS_TEST_ASSERT_MSG_EQ (connectionId, head.GetConnectionId (),
@@ -356,16 +356,17 @@ QuicHeaderTestCase::TestQuicHeaderSerializeDeserialize ()
         NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), 1 + 8*connectionIdFlag + head.GetPacketNumLen ()/8, 
           "QuicHeader for Short Packet is not as expected");
 
+        copyHead.SetConnectionIdFlag (connectionIdFlag);
         copyHead.Deserialize (buffer.Begin ());
 
         NS_TEST_ASSERT_MSG_EQ (copyHead.GetFormat (), QuicHeader::SHORT,
                                    "Different format found");
         NS_TEST_ASSERT_MSG_EQ (copyHead.GetKeyPhaseBit (), keyPhaseBit,
                                    "Different key phase bit found");
-        NS_TEST_ASSERT_MSG_EQ (packetNumber, copyHead.GetPacketNumber (),
+        NS_TEST_ASSERT_MSG_EQ (packetNumber, copyHead.GetPacketNumber (), 
                                    "Different packet number found");        
         if (connectionIdFlag) {
-          NS_TEST_ASSERT_MSG_EQ (connectionId, copyHead.GetConnectionId (),
+          NS_TEST_ASSERT_MSG_EQ (connectionId, copyHead.GetConnectionId (), 
                                              "Different connection id found");
         }
         NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), 1 + 8*connectionIdFlag + copyHead.GetPacketNumLen ()/8, 
@@ -400,11 +401,11 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
       uint32_t firstAckBlock = GET_RANDOM_UINT32 (x);
       std::vector<uint32_t> gaps(10, 1);
       std::vector<uint32_t> additionalAckBlocks(10, 1);
-      uint8_t data = GET_RANDOM_UINT8 (x);
+      uint64_t data64 = GET_RANDOM_UINT64 (x);
       uint64_t length = GET_RANDOM_UINT64 (x);
 
       for ( int h_case = QuicSubheader::PADDING; 
-        h_case != QuicSubheader::STREAM111 +1; h_case++ )
+        h_case <= QuicSubheader::HANDSHAKE_DONE; h_case++ )
         {
           switch ( h_case )
           {
@@ -431,18 +432,18 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
                     "QuicSubHeader for PADDING frame is not as expected in deserialized subheader");
                   break;
-              case QuicSubheader::RST_STREAM:
+              case QuicSubheader::RESET_STREAM:
                   head = QuicSubheader::CreateRstStream (streamId, applicationErrorCode, finalOffset);
 
-                  headSize = 3 + QuicSubheader::GetVarInt64Size(streamId)/8 + QuicSubheader::GetVarInt64Size(finalOffset)/8;
+                  headSize = 1 + QuicSubheader::GetVarInt64Size(streamId)/8 + QuicSubheader::GetVarInt64Size(applicationErrorCode)/8 + QuicSubheader::GetVarInt64Size(finalOffset)/8;
                   
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for RST_STREAM frame is not as expected");
+                    "QuicSubHeader for RESET_STREAM frame is not as expected");
 
                   buffer.AddAtStart (head.GetSerializedSize ());
                   head.Serialize (buffer.Begin ());
 
-                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::RST_STREAM,
+                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::RESET_STREAM,
                                              "Different frame type found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetStreamId (), streamId,
                                              "Different stream id found");
@@ -451,25 +452,25 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
                   NS_TEST_ASSERT_MSG_EQ (head.GetOffset (), finalOffset,
                                              "Different final offset found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for RST_STREAM frame is not as expected");
+                    "QuicSubHeader for RESET_STREAM frame is not as expected");
 
                   copyHead.Deserialize (buffer.Begin ());
 
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::RST_STREAM,
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::RESET_STREAM,
                                              "Different frame type found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetStreamId (), streamId,
                                              "Different stream id found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetErrorCode (), applicationErrorCode,
-                                             "Different application error code id found in deserialized subheader");
+                                             "Different application error code found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetOffset (), finalOffset,
                                              "Different final offset found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for RST_STREAM frame is not as expected in deserialized subheader");
+                    "QuicSubHeader for RESET_STREAM frame is not as expected in deserialized subheader");
                   break;
               case QuicSubheader::CONNECTION_CLOSE:
                   head = QuicSubheader::CreateConnectionClose (errorCode, reasonPhrase);
 
-                  headSize = 3 + QuicSubheader::GetVarInt64Size(strlen(reasonPhrase))/8 + strlen(reasonPhrase);
+                  headSize = 1 + QuicSubheader::GetVarInt64Size(errorCode)/8 + 1 + QuicSubheader::GetVarInt64Size(strlen(reasonPhrase))/8 + strlen(reasonPhrase);
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
                     "QuicSubHeader for CONNECTION_CLOSE frame is not as expected");
@@ -481,8 +482,8 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
                                              "Different frame type found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetErrorCode (), errorCode,
                                              "Different error code id found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetReasonPhraseLength (), strlen(reasonPhrase),
-                                             "Different reason phrase lenght found");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetReasonPhraseLength (), (uint64_t)strlen(reasonPhrase),
+                                             "Different reason phrase length found");
                   for (uint64_t j = 0; j < strlen(reasonPhrase); j++)
                     {
                       NS_TEST_ASSERT_MSG_EQ (head.GetReasonPhrase ()[j], reasonPhrase[j],
@@ -497,8 +498,8 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
                                              "Different frame type found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetErrorCode (), errorCode,
                                              "Different error code id found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetReasonPhraseLength (), strlen(reasonPhrase),
-                                             "Different reason phrase lenght found in deserialized subheader");
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetReasonPhraseLength (), (uint64_t)strlen(reasonPhrase),
+                                             "Different reason phrase length found in deserialized subheader");
                   for (uint64_t j = 0; j < strlen(reasonPhrase); j++)
                     {
                       NS_TEST_ASSERT_MSG_EQ (copyHead.GetReasonPhrase ()[j], reasonPhrase[j],
@@ -510,7 +511,7 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
               case QuicSubheader::APPLICATION_CLOSE:
                   head = QuicSubheader::CreateApplicationClose (errorCode, reasonPhrase);
 
-                  headSize = 3 + QuicSubheader::GetVarInt64Size(strlen(reasonPhrase))/8 + strlen(reasonPhrase);
+                  headSize = 1 + QuicSubheader::GetVarInt64Size(errorCode)/8 + QuicSubheader::GetVarInt64Size(strlen(reasonPhrase))/8 + strlen(reasonPhrase);
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
                     "QuicSubHeader for APPLICATION_CLOSE frame is not as expected");
@@ -522,8 +523,8 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
                                              "Different frame type found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetErrorCode (), errorCode,
                                              "Different error code id found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetReasonPhraseLength (), strlen(reasonPhrase),
-                                             "Different reason phrase lenght found");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetReasonPhraseLength (), (uint64_t)strlen(reasonPhrase),
+                                             "Different reason phrase length found");
                   for (uint64_t j = 0; j < strlen(reasonPhrase); j++)
                     {
                       NS_TEST_ASSERT_MSG_EQ (head.GetReasonPhrase ()[j], reasonPhrase[j],
@@ -538,8 +539,8 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
                                              "Different frame type found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetErrorCode (), errorCode,
                                              "Different error code id found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetReasonPhraseLength (), strlen(reasonPhrase),
-                                             "Different reason phrase lenght found in deserialized subheader");
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetReasonPhraseLength (), (uint64_t)strlen(reasonPhrase),
+                                             "Different reason phrase length found in deserialized subheader");
                   for (uint64_t j = 0; j < strlen(reasonPhrase); j++)
                     {
                       NS_TEST_ASSERT_MSG_EQ (copyHead.GetReasonPhrase ()[j], reasonPhrase[j],
@@ -606,32 +607,60 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
                     "QuicSubHeader for MAX_STREAM_DATA frame is not as expected in deserialized subheader");
                   break;
-              case QuicSubheader::MAX_STREAM_ID:
+              case QuicSubheader::MAX_STREAMS_BIDI:
                   head = QuicSubheader::CreateMaxStreamId (maxStreamId);
 
                   headSize = 1 + QuicSubheader::GetVarInt64Size(maxStreamId)/8;
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for MAX_STREAM_ID frame is not as expected");
+                    "QuicSubHeader for MAX_STREAMS_BIDI frame is not as expected");
 
                   buffer.AddAtStart (head.GetSerializedSize ());
                   head.Serialize (buffer.Begin ());
 
-                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::MAX_STREAM_ID,
+                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::MAX_STREAMS_BIDI,
                                              "Different frame type found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetMaxStreamId (), maxStreamId,
                                              "Different max stream id found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for MAX_STREAM_ID frame is not as expected");
+                    "QuicSubHeader for MAX_STREAMS_BIDI frame is not as expected");
 
                   copyHead.Deserialize (buffer.Begin ());
 
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::MAX_STREAM_ID,
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::MAX_STREAMS_BIDI,
                                              "Different frame type found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetMaxStreamId (), maxStreamId,
                                              "Different max stream id found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for MAX_STREAM_ID frame is not as expected in deserialized subheader");
+                    "QuicSubHeader for MAX_STREAMS_BIDI frame is not as expected in deserialized subheader");
+                  break;
+              case QuicSubheader::MAX_STREAMS_UNI:
+                  head = QuicSubheader::CreateMaxStreamId (maxStreamId);
+                  head.SetFrameType (QuicSubheader::MAX_STREAMS_UNI);
+
+                  headSize = 1 + QuicSubheader::GetVarInt64Size(maxStreamId)/8;
+
+                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
+                    "QuicSubHeader for MAX_STREAMS_UNI frame is not as expected");
+
+                  buffer.AddAtStart (head.GetSerializedSize ());
+                  head.Serialize (buffer.Begin ());
+
+                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::MAX_STREAMS_UNI,
+                                             "Different frame type found");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetMaxStreamId (), maxStreamId,
+                                             "Different max stream id found");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
+                    "QuicSubHeader for MAX_STREAMS_UNI frame is not as expected");
+
+                  copyHead.Deserialize (buffer.Begin ());
+
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::MAX_STREAMS_UNI,
+                                             "Different frame type found in deserialized subheader");
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetMaxStreamId (), maxStreamId,
+                                             "Different max stream id found in deserialized subheader");
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
+                    "QuicSubHeader for MAX_STREAMS_UNI frame is not as expected in deserialized subheader");
                   break;
               case QuicSubheader::PING:
                   head = QuicSubheader::CreatePing ();
@@ -656,95 +685,123 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
                     "QuicSubHeader for PING frame is not as expected in deserialized subheader");
                   break;
-              case QuicSubheader::BLOCKED:
+              case QuicSubheader::DATA_BLOCKED:
                   head = QuicSubheader::CreateBlocked (offset);
 
                   headSize = 1 + QuicSubheader::GetVarInt64Size(offset)/8;
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for BLOCKED frame is not as expected");
+                    "QuicSubHeader for DATA_BLOCKED frame is not as expected");
 
                   buffer.AddAtStart (head.GetSerializedSize ());
                   head.Serialize (buffer.Begin ());
 
-                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::BLOCKED,
+                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::DATA_BLOCKED,
                                              "Different frame type found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetOffset (), offset,
                                              "Different offset found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for BLOCKED frame is not as expected");
+                    "QuicSubHeader for DATA_BLOCKED frame is not as expected");
 
                   copyHead.Deserialize (buffer.Begin ());
 
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::BLOCKED,
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::DATA_BLOCKED,
                                              "Different frame type found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetOffset (), offset,
                                              "Different offset found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for BLOCKED frame is not as expected in deserialized subheader");
+                    "QuicSubHeader for DATA_BLOCKED frame is not as expected in deserialized subheader");
                   break;
-              case QuicSubheader::STREAM_BLOCKED:
+              case QuicSubheader::STREAM_DATA_BLOCKED:
                   head = QuicSubheader::CreateStreamBlocked (streamId, offset);
 
                   headSize = 1 + QuicSubheader::GetVarInt64Size(streamId)/8 + QuicSubheader::GetVarInt64Size(offset)/8;
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM_BLOCKED frame is not as expected");
+                    "QuicSubHeader for STREAM_DATA_BLOCKED frame is not as expected");
 
                   buffer.AddAtStart (head.GetSerializedSize ());
                   head.Serialize (buffer.Begin ());
 
-                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::STREAM_BLOCKED,
+                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::STREAM_DATA_BLOCKED,
                                              "Different frame type found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetOffset (), offset,
                                              "Different offset found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetStreamId (), streamId,
                                              "Different stream id found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM_BLOCKED frame is not as expected");
+                    "QuicSubHeader for STREAM_DATA_BLOCKED frame is not as expected");
 
                   copyHead.Deserialize (buffer.Begin ());
 
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::STREAM_BLOCKED,
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::STREAM_DATA_BLOCKED,
                                              "Different frame type found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetOffset (), offset,
                                              "Different offset found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetStreamId (), streamId,
                                              "Different stream id found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM_BLOCKED frame is not as expected in deserialized subheader");
+                    "QuicSubHeader for STREAM_DATA_BLOCKED frame is not as expected in deserialized subheader");
                   break;
-              case QuicSubheader::STREAM_ID_BLOCKED:
+              case QuicSubheader::STREAMS_BLOCKED_BIDI:
                   head = QuicSubheader::CreateStreamIdBlocked (streamId);
 
                   headSize = 1 + QuicSubheader::GetVarInt64Size(streamId)/8;
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM_ID_BLOCKED frame is not as expected");
+                    "QuicSubHeader for STREAMS_BLOCKED_BIDI frame is not as expected");
 
                   buffer.AddAtStart (head.GetSerializedSize ());
                   head.Serialize (buffer.Begin ());
 
-                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::STREAM_ID_BLOCKED,
+                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::STREAMS_BLOCKED_BIDI,
                                              "Different frame type found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetStreamId (), streamId,
-                                             "Different stream id found");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetMaxStreamId (), streamId,
+                                             "Different max stream id found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM_ID_BLOCKED frame is not as expected");
+                    "QuicSubHeader for STREAMS_BLOCKED_BIDI frame is not as expected");
 
                   copyHead.Deserialize (buffer.Begin ());
 
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::STREAM_ID_BLOCKED,
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::STREAMS_BLOCKED_BIDI,
                                              "Different frame type found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetStreamId (), streamId,
-                                             "Different stream id found in deserialized subheader");
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetMaxStreamId (), streamId,
+                                             "Different max stream id found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM_ID_BLOCKED frame is not as expected in deserialized subheader");
+                    "QuicSubHeader for STREAMS_BLOCKED_BIDI frame is not as expected in deserialized subheader");
+                  break;
+              case QuicSubheader::STREAMS_BLOCKED_UNI:
+                  head = QuicSubheader::CreateStreamIdBlocked (streamId);
+                  head.SetFrameType (QuicSubheader::STREAMS_BLOCKED_UNI);
+
+                  headSize = 1 + QuicSubheader::GetVarInt64Size(streamId)/8;
+
+                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
+                    "QuicSubHeader for STREAMS_BLOCKED_UNI frame is not as expected");
+
+                  buffer.AddAtStart (head.GetSerializedSize ());
+                  head.Serialize (buffer.Begin ());
+
+                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::STREAMS_BLOCKED_UNI,
+                                             "Different frame type found");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetMaxStreamId (), streamId,
+                                             "Different max stream id found");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
+                    "QuicSubHeader for STREAMS_BLOCKED_UNI frame is not as expected");
+
+                  copyHead.Deserialize (buffer.Begin ());
+
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::STREAMS_BLOCKED_UNI,
+                                             "Different frame type found in deserialized subheader");
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetMaxStreamId (), streamId,
+                                             "Different max stream id found in deserialized subheader");
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
+                    "QuicSubHeader for STREAMS_BLOCKED_UNI frame is not as expected in deserialized subheader");
                   break;
               case QuicSubheader::NEW_CONNECTION_ID:
                   head = QuicSubheader::CreateNewConnectionId (sequence, connectionId);
 
-                  headSize = 9 + QuicSubheader::GetVarInt64Size(sequence)/8;
+                  headSize = 1 + QuicSubheader::GetVarInt64Size(sequence)/8 + 1 + 1 + 8 + 16;
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
                     "QuicSubHeader for NEW_CONNECTION_ID frame is not as expected");
@@ -772,10 +829,36 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
                     "QuicSubHeader for NEW_CONNECTION_ID frame is not as expected in deserialized subheader");
                   break;
+              case QuicSubheader::RETIRE_CONNECTION_ID:
+                  head.SetFrameType (QuicSubheader::RETIRE_CONNECTION_ID);
+                  head.SetSequence (sequence);
+
+                  headSize = 1 + QuicSubheader::GetVarInt64Size(sequence)/8;
+
+                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
+                    "QuicSubHeader for RETIRE_CONNECTION_ID frame is not as expected");
+
+                  buffer.AddAtStart (head.GetSerializedSize ());
+                  head.Serialize (buffer.Begin ());
+
+                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::RETIRE_CONNECTION_ID,
+                                             "Different frame type found");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetSequence (), sequence,
+                                             "Different sequence found");
+
+                  copyHead.Deserialize (buffer.Begin ());
+
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::RETIRE_CONNECTION_ID,
+                                             "Different frame type found in deserialized subheader");
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSequence (), sequence,
+                                             "Different sequence found in deserialized subheader");
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
+                    "QuicSubHeader for RETIRE_CONNECTION_ID frame is not as expected in deserialized subheader");
+                  break;
               case QuicSubheader::STOP_SENDING:
                   head = QuicSubheader::CreateStopSending (streamId, applicationErrorCode);
 
-                  headSize = 3 + QuicSubheader::GetVarInt64Size(streamId)/8;
+                  headSize = 1 + QuicSubheader::GetVarInt64Size(streamId)/8 + QuicSubheader::GetVarInt64Size(applicationErrorCode)/8;
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
                     "QuicSubHeader for STOP_SENDING frame is not as expected");
@@ -826,7 +909,7 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
                   NS_TEST_ASSERT_MSG_EQ (head.GetLargestAcknowledged (), largestAcknowledged,
                                              "Different largest acknowledged found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetAckDelay (), ackDelay,
-                                             "Different ack delay found");
+                                             "Different dummy delay found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetAckBlockCount (), gaps.size (),
                                              "Different ack block count found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetFirstAckBlock (), firstAckBlock,
@@ -847,8 +930,8 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetLargestAcknowledged (), largestAcknowledged,
                                              "Different largest acknowledged found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetAckDelay (), ackDelay,
-                                             "Different ack delay found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetAckBlockCount (), gaps.size (),
+                                             "Different dummy delay found in deserialized subheader");
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetAckBlockCount (), (uint64_t)gaps.size (),
                                              "Different ack block count found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetFirstAckBlock (), firstAckBlock,
                                              "Different first ack block found in deserialized subheader");
@@ -864,9 +947,9 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
                     "QuicSubHeader for ACK frame is not as expected in deserialized subheader");
                   break;
               case QuicSubheader::PATH_CHALLENGE:
-                  head = QuicSubheader::CreatePathChallenge (data);
+                  head = QuicSubheader::CreatePathChallenge (data64);
 
-                  headSize = 2;
+                  headSize = 1 + 8; // Type + 8 bytes of data
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
                     "QuicSubHeader for PATH_CHALLENGE frame is not as expected");
@@ -876,7 +959,7 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::PATH_CHALLENGE,
                                              "Different frame type found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetData (), data,
+                  NS_TEST_ASSERT_MSG_EQ (head.GetData (), data64,
                                              "Different data found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
                     "QuicSubHeader for PATH_CHALLENGE frame is not as expected");
@@ -885,15 +968,15 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
 
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::PATH_CHALLENGE,
                                              "Different frame type found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetData (), data,
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetData (), data64,
                                              "Different data found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
                     "QuicSubHeader for PATH_CHALLENGE frame is not as expected in deserialized subheader");
                   break;
               case QuicSubheader::PATH_RESPONSE:
-                  head = QuicSubheader::CreatePathResponse (data);
+                  head = QuicSubheader::CreatePathResponse (data64);
 
-                  headSize = 2;
+                  headSize = 1 + 8; // Type + 8 bytes of data
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
                     "QuicSubHeader for PATH_RESPONSE frame is not as expected");
@@ -903,7 +986,7 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::PATH_RESPONSE,
                                              "Different frame type found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetData (), data,
+                  NS_TEST_ASSERT_MSG_EQ (head.GetData (), data64,
                                              "Different data found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
                     "QuicSubHeader for PATH_RESPONSE frame is not as expected");
@@ -912,267 +995,125 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
 
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::PATH_RESPONSE,
                                              "Different frame type found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetData (), data,
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetData (), data64,
                                              "Different data found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
                     "QuicSubHeader for PATH_RESPONSE frame is not as expected in deserialized subheader");
                   break;
-              case QuicSubheader::STREAM000:
-                  head = QuicSubheader::CreateStreamSubHeader (streamId, offset, length, 
-                    false, false, false);
-
-                  headSize = 1 + QuicSubheader::GetVarInt64Size(streamId)/8;
+              case QuicSubheader::HANDSHAKE_DONE:
+                  head.SetFrameType (QuicSubheader::HANDSHAKE_DONE);
+                  headSize = 1;
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM000 frame is not as expected");
+                    "QuicSubHeader for HANDSHAKE_DONE frame is not as expected");
 
                   buffer.AddAtStart (head.GetSerializedSize ());
                   head.Serialize (buffer.Begin ());
 
-                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::STREAM000,
+                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::HANDSHAKE_DONE,
                                              "Different frame type found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetStreamId (), streamId,
-                                             "Different stream id found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM000 frame is not as expected");
 
                   copyHead.Deserialize (buffer.Begin ());
 
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::STREAM000,
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::HANDSHAKE_DONE,
                                              "Different frame type found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetStreamId (), streamId,
-                                             "Different stream id found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM000 frame is not as expected in deserialized subheader");
+                    "QuicSubHeader for HANDSHAKE_DONE frame is not as expected in deserialized subheader");
                   break;
-              case QuicSubheader::STREAM001:
-                  head = QuicSubheader::CreateStreamSubHeader (streamId, offset, length, 
-                    false, false, true);
-
-                  headSize = 1 + QuicSubheader::GetVarInt64Size(streamId)/8;
+              case QuicSubheader::CRYPTO:
+                  head = QuicSubheader::CreateCrypto (offset, length);
+                  headSize = 1 + QuicSubheader::GetVarInt64Size(offset)/8 + QuicSubheader::GetVarInt64Size(length)/8;
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM001 frame is not as expected");
+                    "QuicSubHeader for CRYPTO frame is not as expected");
 
                   buffer.AddAtStart (head.GetSerializedSize ());
                   head.Serialize (buffer.Begin ());
 
-                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::STREAM001,
+                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::CRYPTO,
                                              "Different frame type found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetStreamId (), streamId,
-                                             "Different stream id found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM001 frame is not as expected");
-
-                  copyHead.Deserialize (buffer.Begin ());
-
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::STREAM001,
-                                             "Different frame type found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetStreamId (), streamId,
-                                             "Different stream id found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM001 frame is not as expected in deserialized subheader");
-                  break;
-              case QuicSubheader::STREAM010:
-                  head = QuicSubheader::CreateStreamSubHeader (streamId, offset, length, 
-                    false, true, false);
-
-                  headSize = 1 + QuicSubheader::GetVarInt64Size(streamId)/8 + QuicSubheader::GetVarInt64Size(length)/8;
-
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM010 frame is not as expected");
-
-                  buffer.AddAtStart (head.GetSerializedSize ());
-                  head.Serialize (buffer.Begin ());
-
-                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::STREAM010,
-                                             "Different frame type found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetStreamId (), streamId,
-                                             "Different stream id found");
+                  NS_TEST_ASSERT_MSG_EQ (head.GetOffset (), offset,
+                                             "Different offset found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetLength (), length,
                                              "Different length found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM010 frame is not as expected");
+                    "QuicSubHeader for CRYPTO frame is not as expected");
 
                   copyHead.Deserialize (buffer.Begin ());
 
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::STREAM010,
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::CRYPTO,
                                              "Different frame type found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetStreamId (), streamId,
-                                             "Different stream id found in deserialized subheader");
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetOffset (), offset,
+                                             "Different offset found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetLength (), length,
                                              "Different length found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM010 frame is not as expected in deserialized subheader");
+                    "QuicSubHeader for CRYPTO frame is not as expected in deserialized subheader");
                   break;
-              case QuicSubheader::STREAM011:
-                  head = QuicSubheader::CreateStreamSubHeader (streamId, offset, length, 
-                    false, true, true);
+              case QuicSubheader::STREAM:
+              case (QuicSubheader::STREAM | 0x01): // FIN
+              case (QuicSubheader::STREAM | 0x02): // LEN
+              case (QuicSubheader::STREAM | 0x03): // FIN | LEN
+              case (QuicSubheader::STREAM | 0x04): // OFF
+              case (QuicSubheader::STREAM | 0x05): // FIN | OFF
+              case (QuicSubheader::STREAM | 0x06): // LEN | OFF
+              case (QuicSubheader::STREAM | 0x07): // FIN | LEN | OFF
+              {
+                  bool offBit = (h_case & 0x04) != 0;
+                  bool lenBit = (h_case & 0x02) != 0;
+                  bool finBit = (h_case & 0x01) != 0;
 
-                  headSize = 1 + QuicSubheader::GetVarInt64Size(streamId)/8 + QuicSubheader::GetVarInt64Size(length)/8;
+                  head = QuicSubheader::CreateStreamSubHeader (streamId, offBit ? offset : 0, lenBit ? length : 0, offBit, lenBit, finBit);
+
+                  headSize = 1 + QuicSubheader::GetVarInt64Size(streamId)/8;
+                  if (offBit) headSize += QuicSubheader::GetVarInt64Size(offset)/8;
+                  if (lenBit) headSize += QuicSubheader::GetVarInt64Size(length)/8;
 
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM011 frame is not as expected");
+                    "QuicSubHeader for STREAM frame is not as expected");
 
                   buffer.AddAtStart (head.GetSerializedSize ());
                   head.Serialize (buffer.Begin ());
 
-                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::STREAM011,
+                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), (uint8_t)h_case,
                                              "Different frame type found");
                   NS_TEST_ASSERT_MSG_EQ (head.GetStreamId (), streamId,
                                              "Different stream id found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetLength (), length,
-                                             "Different length found");
+                  if (offBit) {
+                      NS_TEST_ASSERT_MSG_EQ (head.GetOffset (), offset, "Different offset found");
+                  } else {
+                      NS_TEST_ASSERT_MSG_EQ (head.GetOffset (), 0, "Offset should be 0");
+                  }
+                  if (lenBit) {
+                      NS_TEST_ASSERT_MSG_EQ (head.GetLength (), length, "Different length found");
+                  } else {
+                      NS_TEST_ASSERT_MSG_EQ (head.GetLength (), 0, "Length should be 0");
+                  }
+                  NS_TEST_ASSERT_MSG_EQ (head.IsStreamFin (), finBit, "FIN bit mismatch");
                   NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM011 frame is not as expected");
+                    "QuicSubHeader for STREAM frame is not as expected");
 
                   copyHead.Deserialize (buffer.Begin ());
 
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::STREAM011,
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), (uint8_t)h_case,
                                              "Different frame type found in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetStreamId (), streamId,
                                              "Different stream id found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetLength (), length,
-                                             "Different length found in deserialized subheader");
+                  if (offBit) {
+                      NS_TEST_ASSERT_MSG_EQ (copyHead.GetOffset (), offset, "Different offset found in deserialized subheader");
+                  } else {
+                      NS_TEST_ASSERT_MSG_EQ (copyHead.GetOffset (), 0, "Offset should be 0 in deserialized subheader");
+                  }
+                  if (lenBit) {
+                      NS_TEST_ASSERT_MSG_EQ (copyHead.GetLength (), length, "Different length found in deserialized subheader");
+                  } else {
+                      NS_TEST_ASSERT_MSG_EQ (copyHead.GetLength (), 0, "Length should be 0 in deserialized subheader");
+                  }
+                  NS_TEST_ASSERT_MSG_EQ (copyHead.IsStreamFin (), finBit, "FIN bit mismatch in deserialized subheader");
                   NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM011 frame is not as expected in deserialized subheader");
+                    "QuicSubHeader for STREAM frame is not as expected in deserialized subheader");
                   break;
-              case QuicSubheader::STREAM100:
-                  head = QuicSubheader::CreateStreamSubHeader (streamId, offset, length, 
-                    true, false, false);
-
-                  headSize = 1 + QuicSubheader::GetVarInt64Size(streamId)/8 + QuicSubheader::GetVarInt64Size(offset)/8;
-
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM100 frame is not as expected");
-
-                  buffer.AddAtStart (head.GetSerializedSize ());
-                  head.Serialize (buffer.Begin ());
-
-                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::STREAM100,
-                                             "Different frame type found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetStreamId (), streamId,
-                                             "Different stream id found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetOffset (), offset,
-                                             "Different offset found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM100 frame is not as expected");
-
-                  copyHead.Deserialize (buffer.Begin ());
-
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::STREAM100,
-                                             "Different frame type found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetStreamId (), streamId,
-                                             "Different stream id found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetOffset (), offset,
-                                             "Different offset in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM100 frame is not as expected in deserialized subheader");
-                  break;
-              case QuicSubheader::STREAM101:
-                  head = QuicSubheader::CreateStreamSubHeader (streamId, offset, length, 
-                    true, false, true);
-
-                  headSize = 1 + QuicSubheader::GetVarInt64Size(streamId)/8 + QuicSubheader::GetVarInt64Size(offset)/8;
-
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM101 frame is not as expected");
-
-                  buffer.AddAtStart (head.GetSerializedSize ());
-                  head.Serialize (buffer.Begin ());
-
-                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::STREAM101,
-                                             "Different frame type found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetStreamId (), streamId,
-                                             "Different stream id found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetOffset (), offset,
-                                             "Different offset found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM101 frame is not as expected");
-
-                  copyHead.Deserialize (buffer.Begin ());
-
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::STREAM101,
-                                             "Different frame type found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetStreamId (), streamId,
-                                             "Different stream id found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetOffset (), offset,
-                                             "Different offset in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM101 frame is not as expected in deserialized subheader");
-                  break;
-              case QuicSubheader::STREAM110:
-                  head = QuicSubheader::CreateStreamSubHeader (streamId, offset, length, 
-                    true, true, false);
-
-                  headSize = 1 + QuicSubheader::GetVarInt64Size(streamId)/8 + QuicSubheader::GetVarInt64Size(offset)/8 + QuicSubheader::GetVarInt64Size(length)/8;
-
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM110 frame is not as expected");
-
-                  buffer.AddAtStart (head.GetSerializedSize ());
-                  head.Serialize (buffer.Begin ());
-
-                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::STREAM110,
-                                             "Different frame type found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetStreamId (), streamId,
-                                             "Different stream id found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetOffset (), offset,
-                                             "Different offset found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetLength (), length,
-                                             "Different length found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM110 frame is not as expected");
-
-                  copyHead.Deserialize (buffer.Begin ());
-
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::STREAM110,
-                                             "Different frame type found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetStreamId (), streamId,
-                                             "Different stream id found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetOffset (), offset,
-                                             "Different offset in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetLength (), length,
-                                             "Different length found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM110 frame is not as expected in deserialized subheader");
-                  break;
-              case QuicSubheader::STREAM111:
-                  head = QuicSubheader::CreateStreamSubHeader (streamId, offset, length, 
-                    true, true, true);
-
-                  headSize = 1 + QuicSubheader::GetVarInt64Size(streamId)/8 + QuicSubheader::GetVarInt64Size(offset)/8 + QuicSubheader::GetVarInt64Size(length)/8;
-
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM111 frame is not as expected");
-
-                  buffer.AddAtStart (head.GetSerializedSize ());
-                  head.Serialize (buffer.Begin ());
-
-                  NS_TEST_ASSERT_MSG_EQ (head.GetFrameType (), QuicSubheader::STREAM111,
-                                             "Different frame type found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetStreamId (), streamId,
-                                             "Different stream id found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetOffset (), offset,
-                                             "Different offset found");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetLength (), length,
-                                             "Different length found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (head.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM111 frame is not as expected");
-
-                  copyHead.Deserialize (buffer.Begin ());
-
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetFrameType (), QuicSubheader::STREAM111,
-                                             "Different frame type found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetStreamId (), streamId,
-                                             "Different stream id found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetOffset (), offset,
-                                             "Different offset in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetLength (), length,
-                                             "Different length found in deserialized subheader");
-                  NS_TEST_ASSERT_MSG_EQ (copyHead.GetSerializedSize (), headSize, 
-                    "QuicSubHeader for STREAM111 frame is not as expected in deserialized subheader");
-                  break;
+              }
                default:
                   break;
           }
@@ -1180,8 +1121,6 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
       
     } 
 }
-
-
 
 void
 QuicHeaderTestCase::DoTeardown ()
@@ -1202,7 +1141,7 @@ QuicSubHeaderTestCase::DoTeardown ()
 class QuicHeaderTestSuite : public TestSuite
 {
 public:
-  QuicHeaderTestSuite () :
+  QuicHeaderTestSuite () : 
       TestSuite ("quic-header", UNIT)
   {
     AddTestCase (new QuicHeaderTestCase, TestCase::QUICK);

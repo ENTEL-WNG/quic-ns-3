@@ -140,9 +140,16 @@ QuicL5Protocol::CreateStream (
   NS_LOG_FUNCTION (this << m_streams.size () << streamNum);
 
 
-  if (streamNum > m_socket->GetMaxStreamId ())   // TODO separate unidirectional and bidirectional
+  uint64_t typeMask = 0x00000003;
+  uint8_t type = streamNum & typeMask;
+  bool isBidi = (type == QuicStream::CLIENT_INITIATED_BIDIRECTIONAL || type == QuicStream::SERVER_INITIATED_BIDIRECTIONAL);
+  uint32_t limit = isBidi ? m_socket->GetMaxStreamIdBidirectional () : m_socket->GetMaxStreamIdUnidirectional ();
+
+  // The limit is the number of streams. Max ID = (limit - 1) * 4 + type.
+  // We check if the requested stream index (streamNum / 4) is within the limit.
+  if (streamNum / 4 >= limit)
     {
-      NS_LOG_INFO ("MaxStreamId " << m_socket->GetMaxStreamId ());
+      NS_LOG_INFO ("Stream ID " << streamNum << " exceeds limit (Bidi limit: " << m_socket->GetMaxStreamIdBidirectional () << ", Uni limit: " << m_socket->GetMaxStreamIdUnidirectional () << ")");
       SignalAbortConnection (
         QuicSubheader::TransportErrorCodes_t::STREAM_ID_ERROR,
         "Initiating Stream with higher StreamID with respect to what already negotiated");
@@ -173,10 +180,12 @@ QuicL5Protocol::DispatchSend (Ptr<Packet> data)
   int sentData = 0;
 
   // if the streams are not created yet, open the streams
-  if (m_streams.size () != m_socket->GetMaxStreamId ())
+  // We use the combined limit for the total number of streams in this simplified model
+  uint32_t combinedLimit = m_socket->GetMaxStreamIdBidirectional () + m_socket->GetMaxStreamIdUnidirectional ();
+  if (m_streams.size () < combinedLimit)
     {
-      NS_LOG_INFO ("Create the missing streams");
-      CreateStream (QuicStream::SENDER, m_socket->GetMaxStreamId ());   // TODO open up to max_stream_uni and max_stream_bidi
+      NS_LOG_INFO ("Create the missing streams up to " << combinedLimit);
+      CreateStream (QuicStream::SENDER, (combinedLimit - 1) * 4); // simplistic mapping
     }
 
   std::vector<Ptr<Packet> > disgregated = DisgregateSend (data);
@@ -332,6 +341,12 @@ QuicL5Protocol::DisgregateSend (Ptr<Packet> data)
   uint32_t dataSizeByte = data->GetSize ();
   std::vector< Ptr<Packet> > disgregated;
   //data->Print(std::cout);
+
+  if (m_streams.size () <= 1)
+    {
+      NS_LOG_WARN ("No application streams available to send data");
+      return disgregated;
+    }
 
   // Equally distribute load on all streams except on stream 0
   uint32_t loadPerStream = dataSizeByte / (m_streams.size () - 1);

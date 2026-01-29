@@ -665,7 +665,7 @@ QuicL4Protocol::CreateSocket (TypeId congestionTypeId)
   NS_LOG_FUNCTION (this);
 
   ObjectFactory congestionAlgorithmFactory;
-  congestionAlgorithmFactory.SetTypeId (m_congestionTypeId);
+  congestionAlgorithmFactory.SetTypeId (congestionTypeId);
 
   // create the socket
   Ptr<QuicSocketBase> socket = CreateObject<QuicSocketBase> ();

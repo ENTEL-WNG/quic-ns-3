@@ -64,7 +64,8 @@ QuicSocketTxItem::QuicSocketTxItem ()
     m_acked (false),
     m_isStream (false),
     m_isStream0 (false),
-    m_lastSent (Time::Min ())
+    m_lastSent (Time::Min ()),
+    m_wireSize (0)
 {
   m_generated = Simulator::Now ();
 }
@@ -79,7 +80,8 @@ QuicSocketTxItem::QuicSocketTxItem (const QuicSocketTxItem &other)
     m_isStream (other.m_isStream),
     m_isStream0 (other.m_isStream0),
     m_lastSent (other.m_lastSent),
-    m_generated (other.m_generated)
+    m_generated (other.m_generated),
+    m_wireSize (other.m_wireSize)
 {
   m_packet = other.m_packet->Copy ();
 }
@@ -384,6 +386,8 @@ std::vector<Ptr<QuicSocketTxItem> > QuicSocketTxBuffer::OnAckUpdate (
   compAckBlocks.insert (compAckBlocks.begin (), largestAcknowledged);
   uint32_t ackBlockCount = compAckBlocks.size ();
 
+  tcbd->m_largestAckedPacket = std::max (tcbd->m_largestAckedPacket.GetValue (), largestAcknowledged);
+
   std::vector<uint32_t>::const_iterator ack_it = compAckBlocks.begin ();
   std::vector<uint32_t>::const_iterator gap_it = compGaps.begin ();
 
@@ -440,61 +444,44 @@ std::vector<Ptr<QuicSocketTxItem> > QuicSocketTxBuffer::OnAckUpdate (
         }
     }
   NS_LOG_LOGIC ("Mark lost packets");
-  // Mark packets as lost as in RFC (Sec. 4.2.1 of draft-ietf-quic-recovery-15)
-  uint32_t index = m_sentList.size ();
-  bool lost = false;
-  bool outstanding = false;
-  auto acked_it = m_sentList.rend ();
-  // Iterate over the sent packet list in reverse
-  for (auto sent_it = m_sentList.rbegin ();
-       sent_it != m_sentList.rend () and !m_sentList.empty ();
-       ++sent_it, --index)
+  // RFC 9002 Appendix A.10: DetectAndRemoveLostPackets
+  tcbd->m_lossTime = Seconds (0);
+  Time loss_delay = std::max (tcbd->m_kTimeThreshold * std::max (tcbd->m_latestRtt, tcbd->m_smoothedRtt), MilliSeconds (1)); // kGranularity = 1ms
+  Time lost_send_time = Now () - loss_delay;
+
+  for (auto sent_it = m_sentList.begin ();
+       sent_it != m_sentList.end () and !m_sentList.empty ();
+       ++sent_it)
     {
-      // All previous packets are lost
-      if (lost)
+      Ptr<QuicSocketTxItem> unacked = *sent_it;
+      if (unacked->m_sacked || unacked->m_lost)
         {
-          if (!(*sent_it)->m_sacked)
-            {
-              (*sent_it)->m_lost = true;
-              NS_LOG_LOGIC (
-                "Packet " << (*sent_it)->m_packetNumber << " lost");
-            }
+          continue;
+        }
+
+      if (unacked->m_packetNumber > tcbd->m_largestAckedPacket)
+        {
+          continue;
+        }
+
+      // Mark packet as lost, or set time when it should be marked.
+      if (unacked->m_lastSent <= lost_send_time ||
+          tcbd->m_largestAckedPacket.GetValue () >= unacked->m_packetNumber.GetValue () + tcbd->m_kPacketThreshold)
+        {
+          unacked->m_lost = true;
+          NS_LOG_INFO ("Packet " << unacked->m_packetNumber << " marked lost. PN distance "
+                       << (tcbd->m_largestAckedPacket.GetValue () - unacked->m_packetNumber.GetValue ())
+                       << " or time distance " << (Now () - unacked->m_lastSent).GetSeconds () << "s");
         }
       else
         {
-          // The packet is the last ACKed packet
-          if ((*sent_it)->m_packetNumber.GetValue () == largestAcknowledged)
+          if (tcbd->m_lossTime == Seconds (0))
             {
-              // Mark the packet as ACKed
-              acked_it = sent_it;
-              outstanding = true;
+              tcbd->m_lossTime = unacked->m_lastSent + loss_delay;
             }
-          else if (outstanding && !(*sent_it)->m_sacked)
+          else
             {
-              //ACK-based detection
-              if (largestAcknowledged - (*sent_it)->m_packetNumber.GetValue ()
-                  >= tcbd->m_kReorderingThreshold)
-                {
-                  (*sent_it)->m_lost = true;
-                  lost = true;
-                  NS_LOG_INFO (
-                    "Largest ACK " << largestAcknowledged << ", lost packet " << (*sent_it)->m_packetNumber.GetValue () << " - reordering " << tcbd->m_kReorderingThreshold);
-                }
-              // Time-based detection (optional)
-              if (tcbd->m_kUsingTimeLossDetection)
-                {
-                  double lhsComparison = ((*acked_it)->m_ackTime
-                                          - (*sent_it)->m_lastSent).GetSeconds ();
-                  double rhsComparison = tcbd->m_kTimeReorderingFraction
-                    * tcbd->m_smoothedRtt.GetSeconds ();
-                  if (lhsComparison >= rhsComparison)
-                    {
-                      NS_LOG_UNCOND (
-                        "Largest ACK " << largestAcknowledged << ", lost packet " << (*sent_it)->m_packetNumber.GetValue () << " - time " << rhsComparison);
-                      (*sent_it)->m_lost = true;
-                      lost = true;
-                    }
-                }
+              tcbd->m_lossTime = std::min (tcbd->m_lossTime, unacked->m_lastSent + loss_delay);
             }
         }
     }
@@ -592,20 +579,62 @@ uint32_t QuicSocketTxBuffer::Retransmission (SequenceNumber32 packetNumber)
   return toRetx;
 }
 
-std::vector<Ptr<QuicSocketTxItem> > QuicSocketTxBuffer::DetectLostPackets ()
+std::vector<Ptr<QuicSocketTxItem> > QuicSocketTxBuffer::DetectLostPackets (Ptr<TcpSocketState> tcb)
 {
   NS_LOG_FUNCTION (this);
   std::vector<Ptr<QuicSocketTxItem> > lost;
+  Ptr<QuicSocketState> tcbd = dynamic_cast<QuicSocketState*> (&(*tcb));
+  NS_ASSERT_MSG (tcbd, "tcb is not a QuicSocketState");
+
+  tcbd->m_lossTime = Seconds (0);
+  Time loss_delay = std::max (tcbd->m_kTimeThreshold * std::max (tcbd->m_latestRtt, tcbd->m_smoothedRtt), MilliSeconds (1)); // kGranularity = 1ms
+  Time lost_send_time = Now () - loss_delay;
 
   for (auto sent_it = m_sentList.begin ();
-       sent_it != m_sentList.end () and !m_sentList.empty (); ++sent_it)
+       sent_it != m_sentList.end () and !m_sentList.empty ();
+       ++sent_it)
     {
-      if ((*sent_it)->m_lost)
+      Ptr<QuicSocketTxItem> unacked = *sent_it;
+      if (unacked->m_lost)
         {
-          lost.push_back ((*sent_it));
-          NS_LOG_INFO ("Packet " << (*sent_it)->m_packetNumber << " is lost");
+          lost.push_back (unacked);
+          continue;
+        }
+
+      if (unacked->m_sacked)
+        {
+          continue;
+        }
+
+      if (tcbd->m_largestAckedPacket.GetValue () == 0 ||
+          unacked->m_packetNumber > tcbd->m_largestAckedPacket)
+        {
+          continue;
+        }
+
+      // Mark packet as lost, or set time when it should be marked.
+      if (unacked->m_lastSent <= lost_send_time ||
+          tcbd->m_largestAckedPacket.GetValue () >= unacked->m_packetNumber.GetValue () + tcbd->m_kPacketThreshold)
+        {
+          unacked->m_lost = true;
+          lost.push_back (unacked);
+          NS_LOG_INFO ("Packet " << unacked->m_packetNumber << " marked lost. PN distance "
+                       << (tcbd->m_largestAckedPacket.GetValue () - unacked->m_packetNumber.GetValue ())
+                       << " or time distance " << (Now () - unacked->m_lastSent).GetSeconds () << "s");
+        }
+      else
+        {
+          if (tcbd->m_lossTime == Seconds (0))
+            {
+              tcbd->m_lossTime = unacked->m_lastSent + loss_delay;
+            }
+          else
+            {
+              tcbd->m_lossTime = std::min (tcbd->m_lossTime, unacked->m_lastSent + loss_delay);
+            }
         }
     }
+
   return lost;
 }
 
@@ -676,17 +705,46 @@ uint32_t QuicSocketTxBuffer::BytesInFlight () const
   for (auto sent_it = m_sentList.begin ();
        sent_it != m_sentList.end () and !m_sentList.empty (); ++sent_it)
     {
-      if (!(*sent_it)->m_isStream0 && (*sent_it)->m_isStream
-          && !(*sent_it)->m_sacked)
+      if (!(*sent_it)->m_sacked && !(*sent_it)->m_lost)
         {
-          inFlight += (*sent_it)->m_packet->GetSize ();
+          inFlight += (*sent_it)->m_wireSize > 0 ? (*sent_it)->m_wireSize : (*sent_it)->m_packet->GetSize ();
         }
     }
 
   NS_LOG_INFO (
-    "Compute bytes in flight " << inFlight << " m_sentSize " << m_sentSize << " m_appSize " << m_streamZeroSize + m_scheduler->AppSize ());
+    "Compute total bytes in flight " << inFlight << " m_sentSize " << m_sentSize << " m_appSize " << m_streamZeroSize + m_scheduler->AppSize ());
   return inFlight;
 
+}
+
+uint32_t QuicSocketTxBuffer::GetCongestionControlledBytesInFlight () const
+{
+  NS_LOG_FUNCTION (this);
+  uint32_t inFlight = 0;
+  for (auto sent_it = m_sentList.begin ();
+       sent_it != m_sentList.end () and !m_sentList.empty (); ++sent_it)
+    {
+      if (!(*sent_it)->m_isStream0 && !(*sent_it)->m_sacked && !(*sent_it)->m_lost)
+        {
+          inFlight += (*sent_it)->m_wireSize > 0 ? (*sent_it)->m_wireSize : (*sent_it)->m_packet->GetSize ();
+        }
+    }
+  return inFlight;
+}
+
+uint32_t QuicSocketTxBuffer::GetHandshakeInFlight () const
+{
+  NS_LOG_FUNCTION (this);
+  uint32_t inFlight = 0;
+  for (auto sent_it = m_sentList.begin ();
+       sent_it != m_sentList.end () and !m_sentList.empty (); ++sent_it)
+    {
+      if ((*sent_it)->m_isStream0 && !(*sent_it)->m_sacked && !(*sent_it)->m_lost)
+        {
+          inFlight += (*sent_it)->m_wireSize > 0 ? (*sent_it)->m_wireSize : (*sent_it)->m_packet->GetSize ();
+        }
+    }
+  return inFlight;
 }
 
 void QuicSocketTxBuffer::SetQuicSocketState (Ptr<QuicSocketState> tcb)
@@ -725,7 +783,7 @@ void QuicSocketTxBuffer::UpdatePacketSent (SequenceNumber32 seq, uint32_t sz)
           break;
         }
     }
-  NS_ASSERT_MSG (item, "not found seq " << seq);
+  item->m_wireSize = sz;
   item->m_firstSentTime = m_tcb->m_firstSentTime;
   item->m_deliveredTime = m_tcb->m_deliveredTime;
   item->m_isAppLimited = (m_tcb->m_appLimitedUntil > m_tcb->m_delivered);
@@ -817,7 +875,7 @@ QuicSocketTxBuffer::GenerateRateSample ()
       return false;
     }
 
-  if (m_rs.m_interval != Seconds (0))
+  if (m_rs.m_interval != Seconds (0) && m_rs.m_interval.GetSeconds () > 0.0)
     {
       m_rs.m_deliveryRate = DataRate (discountedDelivered * 8.0 / m_rs.m_interval.GetSeconds ());
     }

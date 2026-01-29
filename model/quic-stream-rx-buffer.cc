@@ -120,6 +120,7 @@ QuicStreamRxBuffer::Add (Ptr<Packet> p, const QuicSubheader& sub)
               m_finalSize = sub.GetOffset () + p->GetSize ();
               m_recvFin = true;
               m_streamRecvList.insert (m_streamRecvList.end (), item);
+              m_numBytesInBuffer += p->GetSize ();
               return true;
             }
 
@@ -172,12 +173,12 @@ QuicStreamRxBuffer::Extract (uint32_t maxSize)
   NS_LOG_INFO (
     "Requested to extract " << extractSize << " bytes from QuicStreamRxBuffer of size = " << m_numBytesInBuffer);
 
+  Ptr<Packet> outPkt = Create<Packet> ();
+
   if (extractSize == 0)
     {
-      return 0;
+      return outPkt;
     }
-
-  Ptr<Packet> outPkt = Create<Packet> ();
 
   QuicStreamRxPacketList::iterator it = m_streamRecvList.begin ();
 
@@ -189,10 +190,10 @@ QuicStreamRxBuffer::Extract (uint32_t maxSize)
 
       if (currentPacket->GetSize () <= extractSize)   // Merge
         {
-
+          uint64_t offset = (*it)->m_offset;
           outPkt->AddAtEnd (currentPacket);
           m_streamRecvList.erase (it);
-          NS_LOG_LOGIC ("Extracted and removed packet " << (*it)->m_offset << " from RxBuffer, bytes to extract: " << extractSize);
+          NS_LOG_LOGIC ("Extracted and removed packet " << offset << " from RxBuffer, bytes to extract: " << extractSize);
 
           m_numBytesInBuffer -= currentPacket->GetSize ();
           extractSize -= currentPacket->GetSize ();
@@ -210,7 +211,6 @@ QuicStreamRxBuffer::Extract (uint32_t maxSize)
   if (outPkt->GetSize () == 0)
     {
       NS_LOG_INFO ("Nothing extracted.");
-      return 0;
     }
 
   return outPkt;

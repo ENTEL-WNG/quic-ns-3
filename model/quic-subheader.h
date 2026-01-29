@@ -42,7 +42,7 @@ namespace ns3 {
  * (stream id, connection id, error code, offset, flags, etc) as well
  * as methods for serialization to and deserialization from a buffer.
  *
- * Frames and Frame Types [Quic IETF Draft 13 Transport - sec. 5]
+ * Frames and Frame Types [RFC 9000 Section 12.4]
  * --------------------------------------------------------------
  *
  * The payload of all packets, after removing packet protection, consists
@@ -74,7 +74,10 @@ namespace ns3 {
  *   |                   Type-Dependent Fields (*)                 ...
  *   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  *
- * Variable-Length Integer Encoding [Quic IETF Draft 13 Transport - sec. 7.1]
+ *   |                          Frame N (*)                        ...
+ *   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *
+ * Variable-Length Integer Encoding [RFC 9000 Section 16]
  * --------------------------------------------------------------------------
  *
  * QUIC frames commonly use a variable-length encoding for non-negative
@@ -103,34 +106,34 @@ class QuicSubheader : public Header
 {
 public:
   /**
-   * \brief Quic subheader type frame values
+   * \brief Quic subheader type frame values (RFC 9000)
    */
   typedef enum
   {
-    PADDING = 0x00,            //!< Padding
-    RST_STREAM = 0x01,         //!< Rst Stream
-    CONNECTION_CLOSE = 0x02,   //!< Connection Close
-    APPLICATION_CLOSE = 0x03,  //!< Application Close
-    MAX_DATA = 0x04,           //!< Max Data
-    MAX_STREAM_DATA = 0x05,    //!< Max Stream Data
-    MAX_STREAM_ID = 0x06,      //!< Max Stream Id
-    PING = 0x07,               //!< Ping
-    BLOCKED = 0x08,            //!< Blocked
-    STREAM_BLOCKED = 0x09,     //!< Stream Blocked
-    STREAM_ID_BLOCKED = 0x0A,  //!< Stream Id Blocked
-    NEW_CONNECTION_ID = 0x0B,  //!< New Connection Id
-    STOP_SENDING = 0x0C,       //!< Stop Sending
-    ACK = 0x0D,                //!< Ack
-    PATH_CHALLENGE = 0x0E,     //!< Path Challenge
-    PATH_RESPONSE = 0x0F,      //!< Path Response
-    STREAM000 = 0x10,          //!< Stream (offset=0, length=0, fin=0)
-    STREAM001 = 0x11,          //!< Stream (offset=0, length=0, fin=1)
-    STREAM010 = 0x12,          //!< Stream (offset=0, length=1, fin=0)
-    STREAM011 = 0x13,          //!< Stream (offset=0, length=1, fin=1)
-    STREAM100 = 0x14,          //!< Stream (offset=1, length=0, fin=0)
-    STREAM101 = 0x15,          //!< Stream (offset=1, length=0, fin=1)
-    STREAM110 = 0x16,          //!< Stream (offset=1, length=1, fin=0)
-    STREAM111 = 0x17           //!< Stream (offset=1, length=1, fin=1)
+    PADDING = 0x00,             //!< Padding
+    PING = 0x01,                //!< Ping
+    ACK = 0x02,                 //!< Ack
+    ACK_ECN = 0x03,             //!< Ack with ECN
+    RESET_STREAM = 0x04,        //!< Reset Stream
+    STOP_SENDING = 0x05,        //!< Stop Sending
+    CRYPTO = 0x06,              //!< Crypto (Handshake data)
+    NEW_TOKEN = 0x07,           //!< New Token
+    STREAM = 0x08,              //!< Stream (0x08-0x0f)
+    MAX_DATA = 0x10,            //!< Max Data
+    MAX_STREAM_DATA = 0x11,     //!< Max Stream Data
+    MAX_STREAMS_BIDI = 0x12,    //!< Max Streams (Bidirectional)
+    MAX_STREAMS_UNI = 0x13,     //!< Max Streams (Unidirectional)
+    DATA_BLOCKED = 0x14,        //!< Data Blocked
+    STREAM_DATA_BLOCKED = 0x15, //!< Stream Data Blocked
+    STREAMS_BLOCKED_BIDI = 0x16,//!< Streams Blocked (Bidirectional)
+    STREAMS_BLOCKED_UNI = 0x17, //!< Streams Blocked (Unidirectional)
+    NEW_CONNECTION_ID = 0x18,   //!< New Connection Id
+    RETIRE_CONNECTION_ID = 0x19,//!< Retire Connection Id
+    PATH_CHALLENGE = 0x1a,      //!< Path Challenge
+    PATH_RESPONSE = 0x1b,       //!< Path Response
+    CONNECTION_CLOSE = 0x1c,    //!< Connection Close (QUIC layer)
+    APPLICATION_CLOSE = 0x1d,   //!< Connection Close (Application layer)
+    HANDSHAKE_DONE = 0x1e       //!< Handshake Done
   } TypeFrame_t;
 
   /**
@@ -340,7 +343,7 @@ public:
    * \param data the data word of the Path Challenge subheader
    * \return the generated QuicSubheader
    */
-  static QuicSubheader CreatePathChallenge (uint8_t data);
+  static QuicSubheader CreatePathChallenge (uint64_t data);
 
   /**
    * Create a Path Response subheader
@@ -348,7 +351,16 @@ public:
    * \param data the data word of the Path Response subheader
    * \return the generated QuicSubheader
    */
-  static QuicSubheader CreatePathResponse (uint8_t data);
+  static QuicSubheader CreatePathResponse (uint64_t data);
+
+  /**
+   * Create a Crypto subheader
+   *
+   * \param offset the offset of the first byte of the frame
+   * \param length the length of the data
+   * \return the generated QuicSubheader
+   */
+  static QuicSubheader CreateCrypto (uint64_t offset, uint64_t length);
 
   /**
    * Create a Stream subheader
@@ -417,13 +429,13 @@ public:
    * \brief Get the data word
    * \return The data word for this QuicSubheader
    */
-  uint8_t GetData () const;
+  uint64_t GetData () const;
 
   /**
    * \brief Set the data word
    * \param data the data word for this QuicSubheader
    */
-  void SetData (uint8_t data);
+  void SetData (uint64_t data);
 
   /**
    * \brief Get the error code
@@ -694,6 +706,12 @@ public:
   bool IsPathResponse () const;
 
   /**
+   * \brief Check if the subheader is Crypto
+   * \return true if the subheader is Crypto, false otherwise
+   */
+  bool IsCrypto () const;
+
+  /**
    * \brief Check if the subheader is Stream
    * \return true if the subheader is Stream, false otherwise
    */
@@ -742,7 +760,7 @@ private:
   uint32_t m_firstAckBlock;                     //!< First Ack block
   std::vector<uint32_t> m_additionalAckBlocks;  //!< Additional ack blocks vector
   std::vector<uint32_t> m_gaps;                 //!< Gaps vector
-  uint8_t m_data;                               //!< Data word
+  uint64_t m_data;                               //!< Data word
   uint64_t m_length;                            //!< Length
 };
 

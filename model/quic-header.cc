@@ -37,7 +37,7 @@ NS_OBJECT_ENSURE_REGISTERED (QuicHeader);
 
 QuicHeader::QuicHeader ()
   : m_form (SHORT),
-  m_c (false),
+  m_c (true), // Default to true for CID present in ns-3
   m_k (PHASE_ZERO),
   m_type (0),
   m_connectionId (0),
@@ -55,17 +55,18 @@ std::string
 QuicHeader::TypeToString () const
 {
   static const char* longTypeNames[6] = {
-    "Version Negotiation",
     "Initial",
-    "Retry",
+    "0-RTT",
     "Handshake",
-    "0-RTT Protected",
+    "Retry",
+    "Version Negotiation",
     "None"
   };
-  static const char* shortTypeNames[4] = {
-    "1 Octet",
-    "2 Octets",
-    "4 Octets"
+  static const char* pnLenNames[4] = {
+    "1 Byte",
+    "2 Bytes",
+    "3 Bytes",
+    "4 Bytes"
   };
 
   std::string typeDescription = "";
@@ -76,7 +77,7 @@ QuicHeader::TypeToString () const
     }
   else
     {
-      typeDescription.append (shortTypeNames[m_type]);
+      typeDescription.append (pnLenNames[m_type]);
     }
   return typeDescription;
 }
@@ -114,13 +115,31 @@ QuicHeader::CalculateHeaderLength () const
 {
   uint32_t len;
 
-  if (IsLong ())
+  if (IsLong ()) 
     {
-      len = 8 + 64 + 32 + 32;
+      /**
+       * RFC 9000 Section 17.2: Long Header bit breakdown
+       * - Flags: 8 bits
+       * - Version: 32 bits
+       * - DCID Length: 8 bits
+       * - DCID: 64 bits (CID_LENGTH * 8)
+       * - SCID Length: 8 bits (Value is 0, so no SCID follows)
+       */
+      len = 8 + 32 + 8 + (CID_LENGTH * 8) + 8;
+      if (!IsVersionNegotiation ()) 
+        {
+          len += GetPacketNumLen ();
+        }
     }
   else
     {
-      len = 8 + 64 * HasConnectionId () + GetPacketNumLen ();
+      /**
+       * RFC 9000 Section 17.3: Short Header bit breakdown
+       * - Flags: 8 bits
+       * - DCID: 64 bits (if present)
+       * - Packet Number: variable (1-4 bytes)
+       */
+      len = 8 + (CID_LENGTH * 8) * HasConnectionId () + GetPacketNumLen ();
     }
   return len / 8;
 }
@@ -128,32 +147,23 @@ QuicHeader::CalculateHeaderLength () const
 uint32_t
 QuicHeader::GetPacketNumLen () const
 {
-  if (IsLong ())
+  if (IsLong ()) 
     {
       return 32;
     }
-  else
+
+  switch (m_type)
     {
-      switch (m_type)
-        {
-        case ONE_OCTECT:
-          {
-            return 8;
-            break;
-          }
-        case TWO_OCTECTS:
-          {
-            return 16;
-            break;
-          }
-        case FOUR_OCTECTS:
-          {
-            return 32;
-            break;
-          }
-        }
+    case PN_1_BYTE:
+      return 8;
+    case PN_2_BYTES:
+      return 16;
+    case PN_3_BYTES:
+      return 24;
+    case PN_4_BYTES:
+      return 32;
     }
-  NS_FATAL_ERROR ("Invalid conditions");
+  NS_FATAL_ERROR ("Invalid packet number length type " << (uint32_t)m_type);
   return 0;
 }
 
@@ -166,21 +176,38 @@ QuicHeader::Serialize (Buffer::Iterator start) const
 
   Buffer::Iterator i = start;
 
-  uint8_t t = m_type + (m_form << 7);
-
-  if (m_form)
+  if (m_form == LONG)
     {
+      // RFC 9000 Section 17.2: Long Header Form
+      uint8_t t = 0xC0; // Long form + Fixed bit
+      if (IsVersionNegotiation ()) 
+        {
+          t = 0x80;
+        }
+      else
+        {
+          t |= (m_type << 4);
+          t |= 0x03; // PN Length encoded as 4 bytes (0x03)
+        }
       i.WriteU8 (t);
-      i.WriteHtonU64 (m_connectionId);
       i.WriteHtonU32 (m_version);
-      if (!IsVersionNegotiation ())
+      // DCID Length and Value
+      i.WriteU8 (CID_LENGTH);
+      i.WriteHtonU64 (m_connectionId);
+      // SCID Length (Value is 0, so no SCID follows)
+      i.WriteU8 (0);
+
+      if (!IsVersionNegotiation ()) 
         {
           i.WriteHtonU32 (m_packetNumber.GetValue ());
         }
     }
   else
     {
-      t += (m_c << 6) + (m_k << 5);
+      // RFC 9000 Section 17.3: Short Header Form
+      uint8_t t = 0x40; // Fixed bit
+      t |= (m_k << 2);
+      t |= (m_type & 0x03); // PN Length
       i.WriteU8 (t);
 
       if (m_c)
@@ -188,16 +215,21 @@ QuicHeader::Serialize (Buffer::Iterator start) const
           i.WriteHtonU64 (m_connectionId);
         }
 
+      uint32_t pn = m_packetNumber.GetValue ();
       switch (m_type)
         {
-        case ONE_OCTECT:
-          i.WriteU8 ((uint8_t)m_packetNumber.GetValue ());
+        case PN_1_BYTE:
+          i.WriteU8 ((uint8_t)pn);
           break;
-        case TWO_OCTECTS:
-          i.WriteHtonU16 ((uint16_t)m_packetNumber.GetValue ());
+        case PN_2_BYTES:
+          i.WriteHtonU16 ((uint16_t)pn);
           break;
-        case FOUR_OCTECTS:
-          i.WriteHtonU32 ((uint32_t)m_packetNumber.GetValue ());
+        case PN_3_BYTES:
+          i.WriteU8 ((uint8_t)(pn >> 16));
+          i.WriteHtonU16 ((uint16_t)pn);
+          break;
+        case PN_4_BYTES:
+          i.WriteHtonU32 ((uint32_t)pn);
           break;
         }
     }
@@ -214,45 +246,71 @@ QuicHeader::Deserialize (Buffer::Iterator start)
 
   m_form = (t & 0x80) >> 7;
 
-  if (IsShort ())
+  if (IsShort ()) 
     {
-      m_c = (t & 0x40) >> 6;
-      m_k = (t & 0x20) >> 5;
-      SetTypeByte (t & 0x1F);
+      // RFC 9000 Section 17.3.1: 1-RTT Packet (Short Header)
+      m_k = (t & 0x04) >> 2;
+      SetTypeByte (t & 0x03);
+      // m_c must be set before Deserialize for Short Headers if no CID is present
     }
   else
     {
-      SetTypeByte (t & 0x7F);
+      // RFC 9000 Section 17.2: Long Header
+      if ((t & 0x40) == 0) 
+        {
+          SetTypeByte (VERSION_NEGOTIATION);
+        }
+      else
+        {
+          SetTypeByte ((t & 0x30) >> 4);
+        }
     }
-  NS_ASSERT (m_type != NONE or m_form == SHORT);
-
-  if (HasConnectionId ())
-    {
-      SetConnectionID (i.ReadNtohU64 ());
-    }
-
-  if (IsLong ())
+  
+  if (IsLong ()) 
     {
       SetVersion (i.ReadNtohU32 ());
-      if (!IsVersionNegotiation ())
+      uint8_t dcidLen = i.ReadU8 ();
+      if (dcidLen == CID_LENGTH) 
+        {
+          SetConnectionID (i.ReadNtohU64 ());
+        }
+      else
+        {
+          i.Next (dcidLen);
+        }
+      uint8_t scidLen = i.ReadU8 ();
+      i.Next (scidLen);
+
+      if (!IsVersionNegotiation ()) 
         {
           SetPacketNumber (SequenceNumber32 (i.ReadNtohU32 ()));
         }
     }
   else
     {
+      if (m_c)
+        {
+          m_connectionId = i.ReadNtohU64 ();
+        }
+
+      uint32_t pn = 0;
       switch (m_type)
         {
-        case ONE_OCTECT:
-          SetPacketNumber (SequenceNumber32 (i.ReadU8 ()));
+        case PN_1_BYTE:
+          pn = i.ReadU8 ();
           break;
-        case TWO_OCTECTS:
-          SetPacketNumber (SequenceNumber32 (i.ReadNtohU16 ()));
+        case PN_2_BYTES:
+          pn = i.ReadNtohU16 ();
           break;
-        case FOUR_OCTECTS:
-          SetPacketNumber (SequenceNumber32 (i.ReadNtohU32 ()));
+        case PN_3_BYTES:
+          pn = i.ReadU8 ();
+          pn = (pn << 16) | i.ReadNtohU16 ();
+          break;
+        case PN_4_BYTES:
+          pn = i.ReadNtohU32 ();
           break;
         }
+      m_packetNumber = SequenceNumber32 (pn);
     }
 
   NS_LOG_INFO ("Deserialize::Serialized Size " << CalculateHeaderLength ());
@@ -267,18 +325,18 @@ QuicHeader::Print (std::ostream &os) const
 
   os << "|" << m_form << "|";
 
-  if (IsShort ())
+  if (IsShort ()) 
     {
       os << m_c << "|" << m_k << "|" << "1|0|";
     }
 
   os << TypeToString () << "|\n|";
 
-  if (HasConnectionId ())
+  if (HasConnectionId ()) 
     {
       os << "ConnectionID " << m_connectionId << "|\n|";
     }
-  if (IsShort ())
+  if (IsShort ()) 
     {
       os << "PacketNumber " << m_packetNumber << "|\n";
     }
@@ -343,7 +401,7 @@ QuicHeader::Create0RTT (uint64_t connectionId, uint32_t version, SequenceNumber3
 
   QuicHeader head;
   head.SetFormat (QuicHeader::LONG);
-  head.SetTypeByte (QuicHeader::ZRTT_PROTECTED);
+  head.SetTypeByte (QuicHeader::ZERO_RTT);
   head.SetConnectionID (connectionId);
   head.SetVersion (version);
   head.SetPacketNumber (packetNumber);
@@ -359,6 +417,7 @@ QuicHeader::CreateShort (uint64_t connectionId, SequenceNumber32 packetNumber, b
   QuicHeader head;
   head.SetFormat (QuicHeader::SHORT);
   head.SetKeyPhaseBit (keyPhaseBit);
+  head.SetConnectionIdFlag (connectionIdFlag);
   head.SetPacketNumber (packetNumber);
 
   if (connectionIdFlag)
@@ -379,22 +438,6 @@ QuicHeader::CreateVersionNegotiation (uint64_t connectionId, uint32_t version, s
   head.SetTypeByte (QuicHeader::VERSION_NEGOTIATION);
   head.SetConnectionID (connectionId);
   head.SetVersion (version);
-
-//	TODO: SetVersions(m)
-//	head.SetVersions(m_supportedVersions);
-//
-//   uint8_t *buffer = new uint8_t[4 * m_supportedVersions.size()];
-//
-//    for (uint8_t i = 0; i < (uint8_t) m_supportedVersions.size(); i++) {
-//
-//	    buffer[4*i] = (m_supportedVersions[i]) ;
-//	    buffer[4*i+1] = (m_supportedVersions[i] >> 8);
-//	    buffer[4*i+2] = (m_supportedVersions[i] >> 16);
-//	    buffer[4*i+3] = (m_supportedVersions[i] >> 24);
-//
-//    }
-//
-//    Ptr<Packet> payload = Create<Packet> (buffer, 4 * m_supportedVersions.size());
 
   return head;
 }
@@ -434,10 +477,7 @@ void
 QuicHeader::SetConnectionID (uint64_t connID)
 {
   m_connectionId = connID;
-  if (IsShort ())
-    {
-      m_c = true;
-    }
+  m_c = true;
 }
 
 SequenceNumber32
@@ -451,19 +491,24 @@ QuicHeader::SetPacketNumber (SequenceNumber32 packNum)
 {
   NS_LOG_INFO (packNum);
   m_packetNumber = packNum;
-  if (IsShort ())
+  if (IsShort ()) 
     {
-      if (packNum.GetValue () < 256)
+      uint32_t val = packNum.GetValue ();
+      if (val < 256) 
         {
-          SetTypeByte (ONE_OCTECT);
+          SetTypeByte (PN_1_BYTE);
         }
-      else if (packNum.GetValue () < 65536)
+      else if (val < 65536) 
         {
-          SetTypeByte (TWO_OCTECTS);
+          SetTypeByte (PN_2_BYTES);
+        }
+      else if (val < 16777216) 
+        {
+          SetTypeByte (PN_3_BYTES);
         }
       else
         {
-          SetTypeByte (FOUR_OCTECTS);
+          SetTypeByte (PN_4_BYTES);
         }
     }
 }
@@ -478,7 +523,6 @@ QuicHeader::GetVersion () const
 void
 QuicHeader::SetVersion (uint32_t version)
 {
-  NS_ASSERT (HasVersion ());
   m_version = version;
 }
 
@@ -528,7 +572,7 @@ QuicHeader::IsHandshake () const
 bool
 QuicHeader::IsORTT () const
 {
-  return m_type == ZRTT_PROTECTED;
+  return m_type == ZERO_RTT;
 }
 
 bool QuicHeader::HasVersion () const
@@ -538,7 +582,13 @@ bool QuicHeader::HasVersion () const
 
 bool QuicHeader::HasConnectionId () const
 {
-  return not (IsShort () and m_c == false);
+  return m_c;
+}
+
+void
+QuicHeader::SetConnectionIdFlag (bool connectionIdFlag)
+{
+  m_c = connectionIdFlag;
 }
 
 bool
@@ -563,4 +613,3 @@ operator<< (std::ostream& os, QuicHeader& tc)
 }
 
 } // namespace ns3
-

@@ -116,7 +116,6 @@ public:
 
 protected:
   void OnPacketAcked (Ptr<TcpSocketState> tcb, Ptr<QuicSocketTxItem> ackedPacket);
-  virtual void OnRetransmissionTimeoutVerified (Ptr<TcpSocketState> tcb);
 
 
   /**

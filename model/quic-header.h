@@ -45,6 +45,13 @@ namespace ns3 {
 class QuicHeader : public Header
 {
 public:
+  /** 
+   * Fixed length for Connection IDs in this implementation (8 bytes).
+   * While RFC 9000 supports variable lengths (0-20 bytes), this model
+   * simplifies handling by using a fixed 64-bit identifier.
+   */
+  static const uint8_t CID_LENGTH = 8;
+
   /**
    * \brief Quic header form bit values
    */
@@ -55,15 +62,15 @@ public:
   } TypeFormat_t;
 
   /**
-   * \brief Quic long header type byte values
+   * \brief Quic long header type byte values (RFC 9000)
    */
   typedef enum
   {
-    VERSION_NEGOTIATION = 0,  //!< Version Negotiation
-    INITIAL  = 1,             //!< Initial
-    RETRY  = 2,               //!< Retry
-    HANDSHAKE  = 3,           //!< Handshake
-    ZRTT_PROTECTED  = 4,      //!< 0-Rtt Protected
+    INITIAL  = 0,             //!< Initial
+    ZERO_RTT = 1,             //!< 0-Rtt
+    HANDSHAKE = 2,            //!< Handshake
+    RETRY = 3,                //!< Retry
+    VERSION_NEGOTIATION = 4,  //!< Version Negotiation
     NONE = 5                  //!< No type byte
   } TypeLong_t;
 
@@ -77,13 +84,14 @@ public:
   } KeyPhase_t;
 
   /**
-   * \brief Quic packet number encodings for headers
+   * \brief Quic packet number encodings for headers (RFC 9000)
    */
   typedef enum
   {
-    ONE_OCTECT = 0x0,    //!< 1 Octet
-    TWO_OCTECTS  = 0x1,  //!< 2 Octets
-    FOUR_OCTECTS  = 0x2  //!< 4 Octects
+    PN_1_BYTE = 0x0,    //!< 1 Byte
+    PN_2_BYTES = 0x1,   //!< 2 Bytes
+    PN_3_BYTES = 0x2,   //!< 3 Bytes
+    PN_4_BYTES = 0x3    //!< 4 Bytes
   } TypeShort_t;
 
   QuicHeader ();
@@ -310,6 +318,12 @@ public:
   bool HasConnectionId ()  const;
 
   /**
+   * \brief Set the connection id flag
+   * \param connectionIdFlag the connection id flag for this QuicHeader
+   */
+  void SetConnectionIdFlag (bool connectionIdFlag);
+
+  /**
    * \brief Check if the header has the version
    * \return true if the header has the version, false otherwise
    */
@@ -325,12 +339,12 @@ public:
 
 private:
   /**
-   * \brief Calculates the header length (in words)
+   * \brief Calculates the header length (in bits)
    *
    * Given the standard size of the header, the method checks for options
-   * and calculates the real length (in words).
+   * and calculates the real length (in bits).
    *
-   * \return header length in 4-byte words
+   * \return header length in bits
    */
   uint32_t CalculateHeaderLength () const;
 

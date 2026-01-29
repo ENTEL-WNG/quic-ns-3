@@ -37,14 +37,14 @@
 
 namespace ns3 {
 
-NS_LOG_COMPONENT_DEFINE ("QuicCongestionControl");
+NS_LOG_COMPONENT_DEFINE ("QuicCongestionOps");
 
 NS_OBJECT_ENSURE_REGISTERED (QuicCongestionOps);
 
 TypeId
 QuicCongestionOps::GetTypeId (void)
 {
-  static TypeId tid = TypeId ("ns3::QuicCongestionControl")
+  static TypeId tid = TypeId ("ns3::QuicCongestionOps")
     .SetParent<TcpNewReno> ()
     .SetGroupName ("Internet")
     .AddConstructor<QuicCongestionOps> ()
@@ -71,7 +71,7 @@ QuicCongestionOps::~QuicCongestionOps (void)
 std::string
 QuicCongestionOps::GetName () const
 {
-  return "QuicCongestionControl";
+  return "QuicCongestionOps";
 }
 
 Ptr<TcpCongestionOps>
@@ -80,7 +80,7 @@ QuicCongestionOps::Fork ()
   return CopyObject<QuicCongestionOps> (this);
 }
 
-// Quic DRAFT 10
+// RFC 9002
 
 void
 QuicCongestionOps::OnPacketSent (Ptr<TcpSocketState> tcb,
@@ -91,7 +91,10 @@ QuicCongestionOps::OnPacketSent (Ptr<TcpSocketState> tcb,
   Ptr<QuicSocketState> tcbd = dynamic_cast<QuicSocketState*> (&(*tcb));
   NS_ASSERT_MSG (tcbd, "tcb is not a QuicSocketState");
 
-  tcbd->m_timeOfLastSentPacket = Now ();
+  if (!isAckOnly)
+    {
+      tcbd->m_timeOfLastSentAckElicitingPacket = Now ();
+    }
   tcbd->m_highTxMark = packetNumber;
 }
 
@@ -102,6 +105,11 @@ QuicCongestionOps::OnAckReceived (Ptr<TcpSocketState> tcb,
                                   const struct RateSample *rs)
 {
   NS_LOG_FUNCTION (this << rs);
+
+  if (newAcks.empty ())
+    {
+      return;
+    }
 
   Ptr<QuicSocketState> tcbd = dynamic_cast<QuicSocketState*> (&(*tcb));
   NS_ASSERT_MSG (tcbd, "tcb is not a QuicSocketState");
@@ -139,6 +147,14 @@ QuicCongestionOps::UpdateRtt (Ptr<TcpSocketState> tcb, Time latestRtt,
   Ptr<QuicSocketState> tcbd = dynamic_cast<QuicSocketState*> (&(*tcb));
   NS_ASSERT_MSG (tcbd, "tcb is not a QuicSocketState");
 
+  tcbd->m_latestRtt = latestRtt;
+  if (tcbd->m_firstRttSample == Time::Max ())
+    {
+      tcbd->m_firstRttSample = Now ();
+    }
+
+  bool firstSample = (tcbd->m_minRtt == Time::Max ());
+
   // m_minRtt ignores ack delay.
   tcbd->m_minRtt = std::min (tcbd->m_minRtt, latestRtt);
 
@@ -156,8 +172,7 @@ QuicCongestionOps::UpdateRtt (Ptr<TcpSocketState> tcb, Time latestRtt,
     }
 
   NS_LOG_LOGIC ("Update smoothed RTT");
-  // Based on [RFC6298].
-  if (tcbd->m_smoothedRtt == Seconds (0))
+  if (firstSample)
     {
       tcbd->m_smoothedRtt = latestRtt;
       tcbd->m_rttVar = latestRtt / 2;
@@ -166,8 +181,8 @@ QuicCongestionOps::UpdateRtt (Ptr<TcpSocketState> tcb, Time latestRtt,
     {
       Time rttVarSample = Time (
         std::abs ((tcbd->m_smoothedRtt - latestRtt).GetDouble ()));
-      tcbd->m_rttVar = 3 / 4 * tcbd->m_rttVar + 1 / 4 * rttVarSample;
-      tcbd->m_smoothedRtt = 7 / 8 * tcbd->m_smoothedRtt + 1 / 8 * latestRtt;
+      tcbd->m_rttVar = 3.0 / 4 * tcbd->m_rttVar + 1.0 / 4 * rttVarSample;
+      tcbd->m_smoothedRtt = 7.0 / 8 * tcbd->m_smoothedRtt + 1.0 / 8 * latestRtt;
     }
 
 }
@@ -182,16 +197,8 @@ QuicCongestionOps::OnPacketAcked (Ptr<TcpSocketState> tcb,
 
   OnPacketAckedCC (tcbd, ackedPacket);
 
-  NS_LOG_LOGIC ("Handle possible RTO");
-  // If a packet sent prior to RTO was acked, then the RTO  was spurious. Otherwise, inform congestion control.
-  if (tcbd->m_rtoCount > 0
-      and ackedPacket->m_packetNumber > tcbd->m_largestSentBeforeRto)
-    {
-      OnRetransmissionTimeoutVerified (tcb);
-    }
   tcbd->m_handshakeCount = 0;
-  tcbd->m_tlpCount = 0;
-  tcbd->m_rtoCount = 0;
+  tcbd->m_ptoCount = 0;
 }
 
 bool
@@ -220,6 +227,14 @@ QuicCongestionOps::OnPacketAckedCC (Ptr<TcpSocketState> tcb,
       // Do not increase congestion window in recovery period.
       return;
     }
+
+  // RFC 9002 Section 7.8
+  if (tcbd->m_bytesInFlight.Get () < tcbd->m_cWnd.Get () && !tcbd->m_pacing)
+    {
+      NS_LOG_LOGIC ("Congestion window underutilized, not increasing.");
+      return;
+    }
+
   if (tcbd->m_cWnd < tcbd->m_ssThresh)
     {
       NS_LOG_LOGIC ("In slow start");
@@ -254,25 +269,29 @@ QuicCongestionOps::OnPacketsLost (
   if (!InRecovery (tcbd, largestLostPacket->m_packetNumber))
     {
       tcbd->m_endOfRecovery = tcbd->m_highTxMark;
+      tcbd->m_congestionRecoveryStartTime = Now ();
       tcbd->m_cWnd *= tcbd->m_kLossReductionFactor;
       if (tcbd->m_cWnd < tcbd->m_kMinimumWindow)
         {
           tcbd->m_cWnd = tcbd->m_kMinimumWindow;
         }
       tcbd->m_ssThresh = tcbd->m_cWnd;
+      
+      // Track first lost packet time for persistent congestion
+      tcbd->m_firstLostTime = lostPackets.at (0)->m_lastSent;
+    }
+    
+  // Check for Persistent Congestion (RFC 9002 Section 7.6)
+  Time congestionPeriod = largestLostPacket->m_lastSent - tcbd->m_firstLostTime;
+  Time persistentThreshold = tcbd->m_kPersistentCongestionThreshold * (tcbd->m_smoothedRtt + std::max (4 * tcbd->m_rttVar, MilliSeconds (1)) + tcbd->m_peerMaxAckDelay);
+  
+  if (congestionPeriod > persistentThreshold)
+    {
+      NS_LOG_INFO ("Persistent Congestion detected. Resetting window.");
+      tcbd->m_cWnd = tcbd->m_kMinimumWindow;
+      tcbd->m_ssThresh = tcbd->m_cWnd; 
     }
 }
 
-void
-QuicCongestionOps::OnRetransmissionTimeoutVerified (
-  Ptr<TcpSocketState> tcb)
-{
-  NS_LOG_FUNCTION (this);
-  Ptr<QuicSocketState> tcbd = dynamic_cast<QuicSocketState*> (&(*tcb));
-  NS_ASSERT_MSG (tcbd, "tcb is not a QuicSocketState");
-  NS_LOG_INFO ("Loss state");
-  tcbd->m_cWnd = tcbd->m_kMinimumWindow;
-  tcbd->m_congState = TcpSocketState::CA_LOSS;
-}
 
 } // namespace ns3

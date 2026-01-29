@@ -268,12 +268,13 @@ QuicTxBufferTestCase::TestRetransmission ()
   // retransmit the first of the two packets
   uint32_t newPackets = 1;
   txBuf.ResetSentList (newPackets);
-  std::vector<Ptr<QuicSocketTxItem>> lostPackets = txBuf.DetectLostPackets ();
+  std::vector<Ptr<QuicSocketTxItem>> lostPackets = txBuf.DetectLostPackets (tcbd);
   NS_TEST_ASSERT_MSG_EQ(lostPackets.size (), 1, "Wrong lost packet vector size");
   NS_TEST_ASSERT_MSG_EQ(lostPackets.at (0)->m_packet->GetSize (), 1200, "TxBuf miscalculates size");
   NS_TEST_ASSERT_MSG_EQ(lostPackets.at (0)->m_packetNumber, SequenceNumber32 (2),
                         "TxBuf gets the wrong lost packet ID");
-  NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 2400, "TxBuf miscalculates size of in flight segments");
+  // After detection, packet 2 is marked as lost, so it's NOT in flight
+  NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (), 1200, "TxBuf miscalculates size of in flight segments");
 
   uint32_t toRetx = txBuf.Retransmission (SequenceNumber32(2));
   NS_TEST_ASSERT_MSG_EQ(toRetx, 1200, "wrong number of lost bytes");
@@ -629,7 +630,7 @@ QuicTxBufferTestCase::TestPartialAck ()
                                                             additionalAckBlocks,
                                                             gaps);
 
-  std::vector<Ptr<QuicSocketTxItem>> lost = txBuf.DetectLostPackets ();
+  std::vector<Ptr<QuicSocketTxItem>> lost = txBuf.DetectLostPackets (tcbd);
   NS_TEST_ASSERT_MSG_EQ(lost.empty (), true,
                         "TxBuf detects a non-existent loss");
   //NS_TEST_ASSERT_MSG_EQ(
@@ -712,7 +713,7 @@ QuicTxBufferTestCase::TestAckLoss ()
                                                             additionalAckBlocks,
                                                             gaps);
 
-  std::vector<Ptr<QuicSocketTxItem>> lost = txBuf.DetectLostPackets ();
+  std::vector<Ptr<QuicSocketTxItem>> lost = txBuf.DetectLostPackets (tcbd);
   NS_TEST_ASSERT_MSG_EQ(
       acked.size(), 5,
       "TxBuf does not correctly detect the number of ACKed packets");
@@ -740,8 +741,9 @@ QuicTxBufferTestCase::TestAckLoss ()
       lost.at (0)->m_packetNumber.GetValue (), 2,
       "TxBuf does not correctly detect the IDs of lost packets");
 
-  NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 1200,
-                        "TxBuf miscalculates size of in flight segments");
+  // After detection, packet 2 is marked as lost, so it's NOT in flight. Packets 1, 3, 4, 5, 6 are acked.
+  NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (), 0,
+                         "TxBuf miscalculates size of in flight segments");
 }
 
 void
@@ -791,7 +793,7 @@ QuicTxBufferTestCase::TestSetLoss ()
   NS_TEST_ASSERT_MSG_EQ(found, true, "TxBuf misses lost packet");
 
   // mark packet 4 as lost
-  std::vector<Ptr<QuicSocketTxItem>> lost = txBuf.DetectLostPackets ();
+  std::vector<Ptr<QuicSocketTxItem>> lost = txBuf.DetectLostPackets (tcbd);
 
   NS_TEST_ASSERT_MSG_EQ(lost.size (), 1,
                         "TxBuf cannot set the correct number of lost packets");
@@ -801,7 +803,7 @@ QuicTxBufferTestCase::TestSetLoss ()
   // mark packets 1 and 2 as lost (all except the last 4)
   txBuf.ResetSentList (4);
 
-  lost = txBuf.DetectLostPackets ();
+  lost = txBuf.DetectLostPackets (tcbd);
 
   NS_TEST_ASSERT_MSG_EQ(lost.size (), 3,
                         "TxBuf cannot set the correct number of lost packets");
@@ -812,8 +814,9 @@ QuicTxBufferTestCase::TestSetLoss ()
   NS_TEST_ASSERT_MSG_EQ(lost.at (2)->m_packetNumber, SequenceNumber32 (4),
                         "TxBuf gets the wrong lost packet ID");
 
-  NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 7200,
-                        "TxBuf miscalculates size of in flight segments");
+  // Packets 1, 2 and 4 are marked as lost, so they are NOT in flight. Packets 3, 5, 6 remain in flight.
+  NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (), 3600,
+                         "TxBuf miscalculates size of in flight segments");
 }
 
 void
@@ -882,7 +885,7 @@ QuicTxBufferTestCase::TestStream0 ()
   Ptr<Packet> p2 = Copy (p1);
   QuicSubheader sub = QuicSubheader::CreateStreamSubHeader (1, 0, p1->GetSize (), false,
                                                    true, false);
-  QuicSubheader sub0 = QuicSubheader::CreateStreamSubHeader (1, 0, p1->GetSize (), false,
+  QuicSubheader sub0 = QuicSubheader::CreateStreamSubHeader (0, 0, p1->GetSize (), false,
                                                     true, false);
   p1->AddHeader (sub);
   p2->AddHeader (sub0);
@@ -901,11 +904,11 @@ QuicTxBufferTestCase::TestStream0 ()
                         "TxBuf miscalculates size of in flight segments");
 
   Ptr<Packet> ptx2 = txBuf.NextStream0Sequence (SequenceNumber32 (2));
-  NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 1200,
+  NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 2400,
                         "TxBuf miscalculates size of in flight segments");
 
   Ptr<Packet> ptx3 = txBuf.NextSequence (1200, SequenceNumber32 (3));
-  NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 2400,
+  NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 3600,
                         "TxBuf miscalculates size of in flight segments");
 
   std::vector<uint32_t> additionalAckBlocks;
@@ -918,7 +921,8 @@ QuicTxBufferTestCase::TestStream0 ()
                                                             largestAcknowledged,
                                                             additionalAckBlocks,
                                                             gaps);
-  NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 1200,
+  // Packet 1 is acked, so packets 2 (stream 0) and 3 (stream 1) remain in flight
+  NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (), 2400,
                         "TxBuf miscalculates size of in flight segments");
 
   largestAcknowledged = 2;

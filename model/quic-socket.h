@@ -28,7 +28,7 @@
 #include "ns3/socket.h"
 
 /**
- * [IETF DRAFT 10 - Quic Transport: sec 4]
+ * [RFC 9000 Section 15]
  *
  * QUIC versions are identified using a 32-bit unsigned number. The version 0x00000000 is
  * reserved to represent version negotiation. This version of the specification is
@@ -45,10 +45,10 @@
  * https://github.com/quicwg/base-drafts/wiki/QUIC-Versions
  */
 
-#define QUIC_VERSION 0x00000001 // This version of the specification
+#define QUIC_VERSION 0x00000001 // RFC 9000
 #define QUIC_VERSION_NEGOTIATION 0x00000000 // Version negotiation
 #define QUIC_VERSION_NEGOTIATION_PATTERN 0x0A0A0A0A // Version negotiation pattern
-#define QUIC_VERSION_DRAFT_10 0xff00000A // Version IETF draft 10
+#define QUIC_VERSION_RFC9000 0x00000001 // Version RFC 9000
 #define QUIC_VERSION_NS3_IMPL 0xf1f1f1f1 // Version Unipd
 
 namespace ns3 {
