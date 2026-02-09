@@ -229,7 +229,7 @@ QuicCongestionOps::OnPacketAckedCC (Ptr<TcpSocketState> tcb,
     }
 
   // RFC 9002 Section 7.8
-  if (tcbd->m_bytesInFlight.Get () < tcbd->m_cWnd.Get () && !tcbd->m_pacing)
+  if (tcbd->m_priorInFlight < tcbd->m_cWnd.Get () && !tcbd->m_pacing)
     {
       NS_LOG_LOGIC ("Congestion window underutilized, not increasing.");
       return;

@@ -149,6 +149,7 @@ public:
   uint32_t              m_lastAckedSackedBytes {0};         //!< Size of data sacked in the last ack
   uint32_t              m_ackBytesSent    {0};              //!< amount of ACK-only bytes sent
   uint32_t              m_ptoCount         {0};              //!< Number of consecutive probe periods without an ACK
+  uint32_t              m_priorInFlight    {0};              //!< Bytes in flight before the current ACK was processed
 };
 
 /**

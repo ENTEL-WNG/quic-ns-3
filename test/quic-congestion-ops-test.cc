@@ -59,7 +59,9 @@ QuicCongestionOpsTestCase::DoRun (void)
   item->m_lastSent = Now ();
   item->m_acked = true;
 
+  tcb->m_bytesInFlight = tcb->m_cWnd;
   cc->PublicOnPacketAcked (tcb, item);
+  tcb->m_bytesInFlight -= 1200;
 
   // In Slow Start, cwnd increases by bytes acked.
   // 12000 + 1200 = 13200
@@ -76,6 +78,7 @@ QuicCongestionOpsTestCase::DoRun (void)
   tcb->m_highTxMark = SequenceNumber32 (10);
 
   cc->OnPacketsLost (tcb, lostPackets);
+  tcb->m_bytesInFlight -= 1200;
 
   // Expect:
   // endOfRecovery = highTxMark (10)
@@ -96,6 +99,7 @@ QuicCongestionOpsTestCase::DoRun (void)
   caItem->m_lastSent = Now ();
   caItem->m_acked = true;
   
+  tcb->m_bytesInFlight = tcb->m_cWnd;
   // Current cwnd 6600. ssThresh 6600.
   // Acking 1200 bytes.
   // Increase = segmentSize * bytesAcked / cwnd
@@ -103,6 +107,7 @@ QuicCongestionOpsTestCase::DoRun (void)
   // New cwnd = 6600 + 218 = 6818.
   
   cc->PublicOnPacketAcked (tcb, caItem);
+  tcb->m_bytesInFlight -= 1200;
   
   NS_TEST_ASSERT_MSG_EQ (tcb->m_cWnd, 6818U, "Congestion avoidance calculation incorrect");
 

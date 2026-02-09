@@ -329,7 +329,14 @@ QuicL4Protocol::GetTxAvailable (Ptr<QuicSocketBase> quicSocket) const
       Ptr<QuicUdpBinding> item = *it;
       if (item->m_quicSocket == quicSocket)
         {
-          return item->m_budpSocket->GetTxAvailable ();
+          if (item->m_budpSocket)
+            {
+              return item->m_budpSocket->GetTxAvailable ();
+            }
+          else if (item->m_budpSocket6)
+            {
+              return item->m_budpSocket6->GetTxAvailable ();
+            }
         }
     }
   return 0;
@@ -346,7 +353,14 @@ QuicL4Protocol::GetRxAvailable (Ptr<QuicSocketBase> quicSocket) const
       Ptr<QuicUdpBinding> item = *it;
       if (item->m_quicSocket == quicSocket)
         {
-          return item->m_budpSocket->GetRxAvailable ();
+          if (item->m_budpSocket)
+            {
+              return item->m_budpSocket->GetRxAvailable ();
+            }
+          else if (item->m_budpSocket6)
+            {
+              return item->m_budpSocket6->GetRxAvailable ();
+            }
         }
     }
   return 0;
@@ -363,7 +377,14 @@ QuicL4Protocol::GetSockName (const ns3::QuicSocketBase* quicSocket, Address &add
       Ptr<QuicUdpBinding> item = *it;
       if (item->m_quicSocket == quicSocket)
         {
-          return item->m_budpSocket->GetSockName (address);
+          if (item->m_budpSocket)
+            {
+              return item->m_budpSocket->GetSockName (address);
+            }
+          else if (item->m_budpSocket6)
+            {
+              return item->m_budpSocket6->GetSockName (address);
+            }
         }
     }
 
@@ -381,7 +402,14 @@ QuicL4Protocol::GetPeerName (const ns3::QuicSocketBase* quicSocket, Address &add
       Ptr<QuicUdpBinding> item = *it;
       if (item->m_quicSocket == quicSocket)
         {
-          return item->m_budpSocket->GetPeerName (address);
+          if (item->m_budpSocket)
+            {
+              return item->m_budpSocket->GetPeerName (address);
+            }
+          else if (item->m_budpSocket6)
+            {
+              return item->m_budpSocket6->GetPeerName (address);
+            }
         }
     }
 
@@ -399,7 +427,14 @@ QuicL4Protocol::BindToNetDevice (Ptr<QuicSocketBase> quicSocket, Ptr<NetDevice> 
       Ptr<QuicUdpBinding> item = *it;
       if (item->m_quicSocket == quicSocket)
         {
-          item->m_budpSocket->BindToNetDevice (netdevice);
+          if (item->m_budpSocket)
+            {
+              item->m_budpSocket->BindToNetDevice (netdevice);
+            }
+          if (item->m_budpSocket6)
+            {
+              item->m_budpSocket6->BindToNetDevice (netdevice);
+            }
         }
     }
 }
@@ -804,7 +839,14 @@ QuicL4Protocol::SendPacket (Ptr<QuicSocketBase> socket, Ptr<Packet> pkt, const Q
       Ptr<QuicUdpBinding> item = *it;
       if (item->m_quicSocket == socket)
         {
-          UdpSend (item->m_budpSocket, packetSent, 0);
+          if (item->m_budpSocket)
+            {
+              UdpSend (item->m_budpSocket, packetSent, 0);
+            }
+          else if (item->m_budpSocket6)
+            {
+              UdpSend (item->m_budpSocket6, packetSent, 0);
+            }
           break;
         }
     }

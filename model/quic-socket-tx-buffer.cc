@@ -664,9 +664,9 @@ void QuicSocketTxBuffer::CleanSentList ()
       Ptr<QuicSocketTxItem> item = *sent_it;
       item->m_acked = true;
       m_sentSize -= item->m_packet->GetSize ();
-      m_sentList.erase (sent_it);
       NS_LOG_LOGIC (
-        "Packet " << (*sent_it)->m_packetNumber << " received and ACKed. Removing from sent buffer");
+        "Packet " << item->m_packetNumber << " received and ACKed. Removing from sent buffer");
+      m_sentList.erase (sent_it);
       sent_it = m_sentList.begin ();
     }
 }
@@ -782,6 +782,11 @@ void QuicSocketTxBuffer::UpdatePacketSent (SequenceNumber32 seq, uint32_t sz)
           item = *it;
           break;
         }
+    }
+  if (!item)
+    {
+      NS_LOG_WARN ("Packet " << seq << " not found in sent list during UpdatePacketSent");
+      return;
     }
   item->m_wireSize = sz;
   item->m_firstSentTime = m_tcb->m_firstSentTime;

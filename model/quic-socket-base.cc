@@ -236,6 +236,7 @@ QuicSocketState::GetTypeId (void)
     TypeId ("ns3::QuicSocketState")
     .SetParent<TcpSocketState> ()
     .SetGroupName ("Internet")
+    .AddConstructor<QuicSocketState> ()
     .AddAttribute ("kInitialRtt",
                    "The default RTT used before an RTT sample is taken",
                    TimeValue (MilliSeconds (333)),
@@ -320,7 +321,8 @@ QuicSocketState::QuicSocketState ()
     m_endOfRecovery (0),
     m_congestionRecoveryStartTime (Seconds (0)),
     m_firstLostTime (Seconds (0)),
-    m_ptoCount (0)
+    m_ptoCount (0),
+    m_priorInFlight (0)
 {
   m_lossDetectionAlarm.Cancel ();
 
@@ -361,7 +363,8 @@ QuicSocketState::QuicSocketState (const QuicSocketState &other)
     m_endOfRecovery (other.m_endOfRecovery),
     m_congestionRecoveryStartTime (other.m_congestionRecoveryStartTime),
     m_firstLostTime (other.m_firstLostTime),
-    m_ptoCount (other.m_ptoCount)
+    m_ptoCount (other.m_ptoCount),
+    m_priorInFlight (other.m_priorInFlight)
 {
   m_lossDetectionAlarm.Cancel ();
 }
@@ -1327,10 +1330,11 @@ QuicSocketBase::SendDataPacket (SequenceNumber32 packetNumber,
         }
     }
 
-  bool isAckOnly = ((sz == 0) & (withAck));
+  bool isAckOnly = ((sz == 0) && (withAck));
 
   if (withAck && !m_receivedPacketNumbers.empty ())
     {
+      p = p->Copy ();
       p->AddAtEnd (OnSendingAckFrame ());
     }
 
@@ -1382,7 +1386,14 @@ QuicSocketBase::SendDataPacket (SequenceNumber32 packetNumber,
   m_txTrace (p, head, this);
   NotifyDataSent (sz);
 
+  if (isAckOnly)
+    {
+      m_txBuffer->UpdateAckSent (packetNumber, sz + head.GetSerializedSize ());
+    }
+  else
+    {
   m_txBuffer->UpdatePacketSent (packetNumber, sz + head.GetSerializedSize ());
+    }
 
   if (!m_quicCongestionControlLegacy)
     {
@@ -2250,6 +2261,7 @@ QuicSocketBase::OnReceivedAckFrame (QuicSubheader &sub)
   // Generate RateSample
   struct RateSample * rs = m_txBuffer->GetRateSample ();
   rs->m_priorInFlight = m_tcb->m_bytesInFlight.Get ();
+  m_tcb->m_priorInFlight = rs->m_priorInFlight;
 
   uint32_t lostOut = m_txBuffer->GetLost ();
   uint32_t delivered = m_tcb->m_delivered;
@@ -3098,6 +3110,7 @@ QuicSocketBase::GetSocketRcvBufSize (void) const
 void
 QuicSocketBase::UpdateCwnd (uint32_t oldValue, uint32_t newValue)
 {
+  NS_LOG_FUNCTION (this << oldValue << newValue);
   m_cWndTrace (oldValue, newValue);
 }
 
@@ -3131,6 +3144,7 @@ QuicSocketBase::UpdateHighTxMark (SequenceNumber32 oldValue, SequenceNumber32 ne
 void
 QuicSocketBase::UpdateBytesInFlight (uint32_t oldValue, uint32_t newValue)
 {
+  NS_LOG_FUNCTION (this << oldValue << newValue);
   m_bytesInFlightTrace (oldValue, newValue);
 }
 
