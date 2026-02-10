@@ -94,7 +94,6 @@ QuicUdpBinding::GetTypeId (void)
                    MakePointerAccessor (&QuicUdpBinding::m_quicSocket),
                    MakePointerChecker<QuicSocketBase> ())
   ;
-  //NS_LOG_UNCOND("QuicUdpBinding");
   return tid;
 }
 
@@ -138,6 +137,10 @@ QuicL4Protocol::GetTypeId (void)
                    ObjectVectorValue (),
                    MakeObjectVectorAccessor (&QuicL4Protocol::m_quicUdpBindingList),
                    MakeObjectVectorChecker<QuicUdpBinding> ())
+    .AddTraceSource ("NewSocket",
+                     "Trace source fired when a new QUIC socket is created",
+                     MakeTraceSourceAccessor (&QuicL4Protocol::m_newSocketTrace),
+                     "ns3::Socket::TracedCallback")
     /*.AddAttribute ("AuthAddresses", "The list of Authenticated addresses associated to this protocol.",
                                            ObjectVectorValue (),
                                            MakeObjectVectorAccessor (&QuicL4Protocol::m_authAddresses),
@@ -683,6 +686,7 @@ QuicL4Protocol::CloneSocket (Ptr<QuicSocketBase> oldsock)
   udpBinding->m_quicSocket = newsock;
   m_quicUdpBindingList.insert (m_quicUdpBindingList.end (), udpBinding);
 
+  m_newSocketTrace (newsock);
   return newsock;
 }
 
@@ -744,6 +748,7 @@ QuicL4Protocol::CreateSocket (TypeId congestionTypeId)
   udpBinding->m_quicSocket = socket;
   m_quicUdpBindingList.insert (m_quicUdpBindingList.end (), udpBinding);
 
+  m_newSocketTrace (socket);
   return socket;
 }
 

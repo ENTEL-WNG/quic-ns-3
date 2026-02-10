@@ -1392,7 +1392,7 @@ QuicSocketBase::SendDataPacket (SequenceNumber32 packetNumber,
     }
   else
     {
-  m_txBuffer->UpdatePacketSent (packetNumber, sz + head.GetSerializedSize ());
+      m_txBuffer->UpdatePacketSent (packetNumber, sz + head.GetSerializedSize ());
     }
 
   if (!m_quicCongestionControlLegacy)
@@ -2339,6 +2339,7 @@ QuicSocketBase::OnReceivedAckFrame (QuicSubheader &sub)
             {
               qcc->OnAckReceived (m_tcb, sub, ackedPackets, rs);
               m_lastRtt = m_tcb->m_lastRtt;
+              NS_LOG_DEBUG ("Updated m_lastRtt to " << m_lastRtt.Get().GetSeconds());
             }
         }
       else
@@ -2361,6 +2362,7 @@ QuicSocketBase::OnReceivedAckFrame (QuicSubheader &sub)
               Time ackDelay = MicroSeconds (sub.GetAckDelay ());
               m_tcb->m_lastRtt = Now () - lastAcked->m_lastSent - ackDelay;
               m_lastRtt = m_tcb->m_lastRtt;
+              NS_LOG_DEBUG ("Updated m_lastRtt (legacy) to " << m_lastRtt.Get().GetSeconds());
             }
           if (m_tcb->m_congState != TcpSocketState::CA_RECOVERY
               && m_tcb->m_congState != TcpSocketState::CA_LOSS)
@@ -3117,6 +3119,7 @@ QuicSocketBase::UpdateCwnd (uint32_t oldValue, uint32_t newValue)
 void
 QuicSocketBase::UpdateSsThresh (uint32_t oldValue, uint32_t newValue)
 {
+  NS_LOG_FUNCTION (this << oldValue << newValue);
   m_ssThTrace (oldValue, newValue);
 }
 
@@ -3124,6 +3127,7 @@ void
 QuicSocketBase::UpdateCongState (TcpSocketState::TcpCongState_t oldValue,
                                  TcpSocketState::TcpCongState_t newValue)
 {
+  NS_LOG_FUNCTION (this << oldValue << newValue);
   m_congStateTrace (oldValue, newValue);
 }
 
@@ -3132,12 +3136,14 @@ QuicSocketBase::UpdateNextTxSequence (SequenceNumber32 oldValue,
                                       SequenceNumber32 newValue)
 
 {
+  NS_LOG_FUNCTION (this << oldValue << newValue);
   m_nextTxSequenceTrace (oldValue.GetValue (), newValue.GetValue ());
 }
 
 void
 QuicSocketBase::UpdateHighTxMark (SequenceNumber32 oldValue, SequenceNumber32 newValue)
 {
+  NS_LOG_FUNCTION (this << oldValue << newValue);
   m_highTxMarkTrace (oldValue.GetValue (), newValue.GetValue ());
 }
 

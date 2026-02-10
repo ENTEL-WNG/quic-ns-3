@@ -28,6 +28,7 @@
 #include <stdint.h>
 #include <map>
 #include "ns3/node.h"
+#include "ns3/traced-value.h"
 #include "ns3/ipv4-address.h"
 #include "ns3/ipv6-address.h"
 #include "ns3/sequence-number.h"
@@ -447,6 +448,7 @@ private:
   IpL4Protocol::DownTargetCallback m_downTarget;
   IpL4Protocol::DownTargetCallback6 m_downTarget6;
 
+  TracedCallback<Ptr<Socket>> m_newSocketTrace;
 };
 
 } // namespace ns3
