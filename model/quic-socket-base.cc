@@ -179,7 +179,6 @@ QuicSocketBase::GetTypeId (void)
                    TimeValue (MilliSeconds (100)),
                    MakeTimeAccessor (&QuicSocketBase::m_defaultLatency),
                    MakeTimeChecker ())
-
     .AddAttribute ("TCB",
                    "The connection's QuicSocketState",
                    PointerValue (),
@@ -225,6 +224,10 @@ QuicSocketBase::GetTypeId (void)
                      "Receive QUIC packet from UDP protocol",
                      MakeTraceSourceAccessor (&QuicSocketBase::m_rxTrace),
                      "ns3::QuicSocketBase::QuicTxRxTracedCallback")
+    .AddTraceSource ("SocketState",
+                     "The current state of the QUIC socket",
+                     MakeTraceSourceAccessor (&QuicSocketBase::m_socketState),
+                     "ns3::QuicSocket::QuicStates_t::TracedValueCallback")
   ;
   return tid;
 }
@@ -1036,20 +1039,6 @@ QuicSocketBase::SendPendingData (bool withAck)
       if (m_socketState == CONNECTING_CLT || m_socketState == CONNECTING_SVR)
         {
           NS_LOG_INFO ("CONNECTING_CLT and CONNECTING_SVR state; no data to transmit");
-          break;
-        }
-
-      uint32_t availableData = m_txBuffer->AppSize ();
-
-      if (availableData < availableWindow and !m_closeOnEmpty)
-        {
-          NS_LOG_INFO ("Ask the app for more data before trying to send");
-          NotifySend (GetTxAvailable ());
-        }
-
-      if (availableWindow < GetSegSize () and availableData > availableWindow and !m_closeOnEmpty)
-        {
-          NS_LOG_INFO ("Preventing Silly Window Syndrome. Wait to Send.");
           break;
         }
 

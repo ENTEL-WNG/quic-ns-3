@@ -582,60 +582,55 @@ uint32_t QuicSocketTxBuffer::Retransmission (SequenceNumber32 packetNumber)
 std::vector<Ptr<QuicSocketTxItem> > QuicSocketTxBuffer::DetectLostPackets (Ptr<TcpSocketState> tcb)
 {
   NS_LOG_FUNCTION (this);
-  std::vector<Ptr<QuicSocketTxItem> > lost;
+  std::vector<Ptr<QuicSocketTxItem>> newly_lost;
   Ptr<QuicSocketState> tcbd = dynamic_cast<QuicSocketState*> (&(*tcb));
   NS_ASSERT_MSG (tcbd, "tcb is not a QuicSocketState");
 
   tcbd->m_lossTime = Seconds (0);
-  Time loss_delay = std::max (tcbd->m_kTimeThreshold * std::max (tcbd->m_latestRtt, tcbd->m_smoothedRtt), MilliSeconds (1)); // kGranularity = 1ms
+  Time loss_delay = std::max (tcbd->m_kTimeThreshold * std::max (tcbd->m_latestRtt, tcbd->m_smoothedRtt), tcbd->m_kGranularity);
   Time lost_send_time = Now () - loss_delay;
 
-  for (auto sent_it = m_sentList.begin ();
-       sent_it != m_sentList.end () and !m_sentList.empty ();
-       ++sent_it)
+  auto sent_it = m_sentList.begin ();
+  while (sent_it != m_sentList.end ())
     {
       Ptr<QuicSocketTxItem> unacked = *sent_it;
-      if (unacked->m_lost)
-        {
-          lost.push_back (unacked);
-          continue;
-        }
 
-      if (unacked->m_sacked)
-        {
-          continue;
-        }
+      // Skip packets already handled (sacked)
+      if (unacked->m_sacked) { 
+          sent_it++; 
+          continue; 
+      }
 
-      if (tcbd->m_largestAckedPacket.GetValue () == 0 ||
-          unacked->m_packetNumber > tcbd->m_largestAckedPacket)
-        {
-          continue;
-        }
+      // Optimization: Stop if we reach packets not yet acked by the peer
+      if (unacked->m_packetNumber > tcbd->m_largestAckedPacket) {
+          break;
+      }
 
-      // Mark packet as lost, or set time when it should be marked.
+      // Check RFC 9002 Loss Thresholds
       if (unacked->m_lastSent <= lost_send_time ||
           tcbd->m_largestAckedPacket.GetValue () >= unacked->m_packetNumber.GetValue () + tcbd->m_kPacketThreshold)
         {
           unacked->m_lost = true;
-          lost.push_back (unacked);
-          NS_LOG_INFO ("Packet " << unacked->m_packetNumber << " marked lost. PN distance "
-                       << (tcbd->m_largestAckedPacket.GetValue () - unacked->m_packetNumber.GetValue ())
-                       << " or time distance " << (Now () - unacked->m_lastSent).GetSeconds () << "s");
+          newly_lost.push_back (unacked);
+          // Decrement the sent size (Bytes In Flight)
+          m_sentSize -= unacked->m_packet->GetSize();
+          // Remove from the flight list to prevent re-processing
+          sent_it = m_sentList.erase (sent_it); 
+          
+          NS_LOG_INFO ("Packet " << unacked->m_packetNumber << " newly lost.");
+          continue; // erase() moved the iterator
         }
       else
         {
-          if (tcbd->m_lossTime == Seconds (0))
-            {
-              tcbd->m_lossTime = unacked->m_lastSent + loss_delay;
-            }
-          else
-            {
-              tcbd->m_lossTime = std::min (tcbd->m_lossTime, unacked->m_lastSent + loss_delay);
-            }
+          // Update the loss timer for future checks
+          Time expected_loss_time = unacked->m_lastSent + loss_delay;
+          if (tcbd->m_lossTime == Seconds (0) || expected_loss_time < tcbd->m_lossTime) {
+              tcbd->m_lossTime = expected_loss_time;
+          }
+          sent_it++;
         }
     }
-
-  return lost;
+  return newly_lost;
 }
 
 uint32_t QuicSocketTxBuffer::GetLost ()

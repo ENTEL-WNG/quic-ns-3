@@ -192,21 +192,6 @@ QuicStreamBase::SendPendingData (void)
 
   while (availableWindow > 0 and m_txBuffer->AppSize () > 0)
     {
-//	  uint32_t availableData = m_txBuffer->Available();
-
-//	  if(availableData < availableWindow)
-//	  {
-//	          NS_LOG_INFO("Ask the app for more data before trying to send");
-//		  NotifySend(GetTxAvailable());
-//	  }
-
-//	  if(availableWindow < m_quicl5->GetMaxPacketSize() and availableData > availableWindow)
-//	  {
-//	          NS_LOG_INFO("Preventing Silly Windows Syndrome. Wait to Send.");
-//		  break;
-//	  }
-
-
       uint32_t s = std::min (availableWindow, (uint32_t)m_quicl5->GetMaxPacketSize ());
 
       NS_LOG_DEBUG ("BEFOREAvailable Window " << AvailableWindow () <<
