@@ -117,7 +117,7 @@ QuicCongestionOps::OnAckReceived (Ptr<TcpSocketState> tcb,
   tcbd->m_largestAckedPacket = SequenceNumber32 (
     ack.GetLargestAcknowledged ());
 
-  // newAcks are ordered from the highest packet number to the smalles
+  // newAcks are ordered from the highest packet number to the smallest
   Ptr<QuicSocketTxItem> lastAcked = newAcks.at (0);
 
   NS_LOG_LOGIC ("Updating RTT estimate");
@@ -220,19 +220,30 @@ QuicCongestionOps::OnPacketAckedCC (Ptr<TcpSocketState> tcb,
   Ptr<QuicSocketState> tcbd = dynamic_cast<QuicSocketState*> (&(*tcb));
   NS_ASSERT_MSG (tcbd, "tcb is not a QuicSocketState");
 
-  NS_LOG_INFO ("Updating congestion window");
-  if (InRecovery (tcb, ackedPacket->m_packetNumber))
+  // If the packet was already marked lost and removed from BytesInFlight, 
+  // do not reward the window.
+  if (ackedPacket->m_lost) 
     {
-      NS_LOG_LOGIC ("In recovery");
-      // Do not increase congestion window in recovery period.
+      NS_LOG_LOGIC ("Spurious ACK received (not in flight); window will not grow.");
       return;
     }
 
-  // RFC 9002 Section 7.8
-  if (tcbd->m_priorInFlight < tcbd->m_cWnd.Get () && !tcbd->m_pacing)
+  NS_LOG_INFO ("Updating congestion window");
+  if (InRecovery (tcb, ackedPacket->m_packetNumber))
     {
-      NS_LOG_LOGIC ("Congestion window underutilized, not increasing.");
+      NS_LOG_LOGIC ("In recovery; window will not grow.");
       return;
+    }
+
+  // RFC 9002 Section 7.8. Underutilizing the Congestion Window
+  if (tcbd->m_priorInFlight < tcbd->m_cWnd.Get ())
+    {
+      if (tcbd->m_appLimitedUntil > tcbd->m_delivered) 
+        {
+          NS_LOG_LOGIC ("Congestion window underutilized, application limited; window will not grow.");
+          return;
+        }
+        // else --> Pacing limited, should grow
     }
 
   if (tcbd->m_cWnd < tcbd->m_ssThresh)
@@ -259,6 +270,11 @@ QuicCongestionOps::OnPacketsLost (
   Ptr<TcpSocketState> tcb, std::vector<Ptr<QuicSocketTxItem> > lostPackets)
 {
   NS_LOG_LOGIC (this);
+  // Guard against empty vectors during PTO events
+  if (lostPackets.empty())
+    {
+      return;
+    }
   Ptr<QuicSocketState> tcbd = dynamic_cast<QuicSocketState*> (&(*tcb));
   NS_ASSERT_MSG (tcbd, "tcb is not a QuicSocketState");
 

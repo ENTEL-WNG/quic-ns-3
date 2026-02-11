@@ -1381,6 +1381,16 @@ QuicSocketBase::SendDataPacket (SequenceNumber32 packetNumber,
       return 0;
     }
 
+  // Add padding to the packet to match segment size if app-limited
+  uint32_t finalSize = p->GetSize () + head.GetSerializedSize ();
+  if (!isAckOnly && finalSize < GetSegSize () && m_txBuffer->AppSize () == 0)
+    {
+      uint32_t paddingSize = GetSegSize () - finalSize;
+      p->AddAtEnd (Create<Packet> (paddingSize));
+      finalSize += paddingSize;
+      NS_LOG_DEBUG ("Padded packet " << packetNumber << " by " << paddingSize << " bytes. Final size: " << finalSize);
+    }
+
   NS_LOG_INFO ("SendDataPacket of size " << p->GetSize ());
   m_quicl4->SendPacket (this, p, head);
   m_txTrace (p, head, this);
@@ -1388,11 +1398,11 @@ QuicSocketBase::SendDataPacket (SequenceNumber32 packetNumber,
 
   if (isAckOnly)
     {
-      m_txBuffer->UpdateAckSent (packetNumber, sz + head.GetSerializedSize ());
+      m_txBuffer->UpdateAckSent (packetNumber, finalSize);
     }
   else
     {
-      m_txBuffer->UpdatePacketSent (packetNumber, sz + head.GetSerializedSize ());
+      m_txBuffer->UpdatePacketSent (packetNumber, finalSize);
     }
 
   if (!m_quicCongestionControlLegacy)
@@ -2260,13 +2270,12 @@ QuicSocketBase::OnReceivedAckFrame (QuicSubheader &sub)
 
   // Generate RateSample
   struct RateSample * rs = m_txBuffer->GetRateSample ();
+  uint32_t previousWindow = BytesInFlight ();
   rs->m_priorInFlight = m_tcb->m_bytesInFlight.Get ();
   m_tcb->m_priorInFlight = rs->m_priorInFlight;
 
   uint32_t lostOut = m_txBuffer->GetLost ();
   uint32_t delivered = m_tcb->m_delivered;
-
-  uint32_t previousWindow = m_txBuffer->BytesInFlight ();
 
   std::vector<uint32_t> additionalAckBlocks = sub.GetAdditionalAckBlocks ();
   std::vector<uint32_t> gaps = sub.GetGaps ();
@@ -2486,15 +2495,6 @@ QuicSocketBase::OnReceivedTransportParameters (
       return;
     }
 
-// version 15 has removed the upper bound on the idle timeout
-// if (transportParameters.GetIdleTimeout () > 600)
-//   {
-//     AbortConnection (
-//         QuicSubheader::TransportErrorCodes_t::TRANSPORT_PARAMETER_ERROR,
-//         "Invalid Idle Timeout value provided");
-//     return;
-//   }
-
   NS_LOG_DEBUG (
     "Before applying received transport parameters " << " m_initial_max_stream_data " << m_initial_max_stream_data << " m_max_data " << m_max_data << " m_initial_max_stream_id_bidi " << m_initial_max_stream_id_bidi << " m_idleTimeout " << m_idleTimeout << " m_omit_connection_id " << m_omit_connection_id << " m_tcb->m_segmentSize " << m_tcb->m_segmentSize << " m_ack_delay_exponent " << m_ack_delay_exponent << " m_initial_max_stream_id_uni " << m_initial_max_stream_id_uni);
 
@@ -2637,7 +2637,7 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
       return;
     }
 
-  int onlyAckFrames = 0;
+  int isAckEliciting = 0;
   bool unsupportedVersion = false;
 
   if (quicHeader.IsORTT () and m_socketState == LISTENING)
@@ -2652,7 +2652,7 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
 
       m_couldContainTransportParameters = true;
 
-      onlyAckFrames = m_quicl5->DispatchRecv (p, address);
+      isAckEliciting = m_quicl5->DispatchRecv (p, address);
       if (m_socketState == IDLE || m_socketState == CLOSING)
         {
           return;
@@ -2692,7 +2692,7 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
           return;
         }
 
-      onlyAckFrames = m_quicl5->DispatchRecv (p, address);
+      isAckEliciting = m_quicl5->DispatchRecv (p, address);
       if (m_socketState == IDLE || m_socketState == CLOSING)
         {
           return;
@@ -2717,7 +2717,7 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
     {
       NS_LOG_INFO ("Client receives HANDSHAKE");
 
-      onlyAckFrames = m_quicl5->DispatchRecv (p, address);
+      isAckEliciting = m_quicl5->DispatchRecv (p, address);
       if (m_socketState == IDLE || m_socketState == CLOSING)
         {
           return;
@@ -2737,7 +2737,7 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
     {
       NS_LOG_INFO ("Server receives HANDSHAKE");
 
-      onlyAckFrames = m_quicl5->DispatchRecv (p, address);
+      isAckEliciting = m_quicl5->DispatchRecv (p, address);
       if (m_socketState == IDLE || m_socketState == CLOSING)
         {
           return;
@@ -2802,34 +2802,32 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
     }
   else if (quicHeader.IsShort () and m_socketState == OPEN)
     {
-      // TODOACK here?
-      // we need to check if the packet contains only an ACK frame
-      // in this case we cannot explicitely ACK it!
-      // check if delayed ACK is used
       m_receivedPacketNumbers.push_back (quicHeader.GetPacketNumber ());
-      onlyAckFrames = m_quicl5->DispatchRecv (p, address);
+      isAckEliciting = m_quicl5->DispatchRecv (p, address);
 
     }
   else if (m_socketState == CLOSING)
     {
-
       AbortConnection (m_transportErrorCode,
                        "Received packet in Closing state");
-
     }
   else
     {
-
       return;
     }
 
-  // trigger the process for ACK handling if the received packet was not ACK only
-  NS_LOG_DEBUG ("onlyAckFrames " << onlyAckFrames << " unsupportedVersion " << unsupportedVersion);
-  if (onlyAckFrames == 1 && !unsupportedVersion)
+  // Trigger ACK handling only for ack-eliciting packets
+  // isAckEliciting: true (1) means packet IS ack-eliciting, false (0) means NOT ack-eliciting
+  NS_LOG_DEBUG ("isAckEliciting " << isAckEliciting << " unsupportedVersion " << unsupportedVersion);
+  if (isAckEliciting == 1 && !unsupportedVersion)
     {
       m_lastReceived = Simulator::Now ();
-      NS_LOG_DEBUG ("Call MaybeQueueAck");
+      NS_LOG_DEBUG ("Received ack-eliciting packet, call MaybeQueueAck");
       MaybeQueueAck ();
+    }
+  else if (isAckEliciting == 0)
+    {
+      NS_LOG_INFO ("Received non-ack-eliciting packet (ACK-only), no ACK needed");
     }
 
 }

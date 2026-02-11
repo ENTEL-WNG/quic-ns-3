@@ -261,16 +261,22 @@ QuicL5Protocol::DispatchRecv (Ptr<Packet> data, Address &address)
       return -1;
     }
 
-  bool onlyAckFrames = true;
+  // RFC 9000 Section 13.2: Determine if packet is ack-eliciting
+  // A packet is ack-eliciting if it contains ANY frame other than ACK, PADDING, or CONNECTION_CLOSE
+  bool isAckEliciting = false;
   uint64_t currStreamNum = m_streams.size () - 1;
   for (auto &elem : disgregated)
     {
       QuicSubheader sub = elem.second;
-
-      // check if this is an ack frame
-      if (!sub.IsAck ())
+      // RFC 9000 Section 13.2.1: Frames that are NOT ack-eliciting:
+      // - ACK
+      // - PADDING  
+      // - CONNECTION_CLOSE
+      // - APPLICATION_CLOSE
+      // All other frames ARE ack-eliciting (including STREAM, PING, CRYPTO, etc.)
+      if (!sub.IsAck () && !sub.IsPadding () && !sub.IsConnectionClose () && !sub.IsApplicationClose ())
         {
-          onlyAckFrames = false;
+          isAckEliciting = true;
         }
 
       if (sub.GetStreamId () > currStreamNum)
@@ -311,8 +317,9 @@ QuicL5Protocol::DispatchRecv (Ptr<Packet> data, Address &address)
         }
     }
 
-  // trigger ACK TX if the received packet was not ACK-only
-  return !onlyAckFrames;
+  // Return 1 if packet IS ack-eliciting, 0 if NOT ack-eliciting
+  // This tells QuicSocketBase whether to call MaybeQueueAck()
+  return isAckEliciting ? 1 : 0;
 }
 
 int
@@ -380,30 +387,36 @@ QuicL5Protocol::DisgregateRecv (Ptr<Packet> data)
 {
   NS_LOG_FUNCTION (this);
 
-  uint32_t dataSizeByte = data->GetSize ();
   std::vector< std::pair<Ptr<Packet>, QuicSubheader> > disgregated;
-  NS_LOG_INFO ("DisgregateRecv for a packet with size " << dataSizeByte);
+  NS_LOG_INFO ("DisgregateRecv for a packet with size " << data->GetSize ());
   //data->Print(std::cout);
 
   // the packet could contain multiple frames
   // each of them starts with a subheader
   // cycle through the data packet and extract the frames
-  for (uint32_t start = 0; start < dataSizeByte; )
+  while (data->GetSize () > 0)
     {
       QuicSubheader sub;
       data->RemoveHeader (sub);
-      NS_LOG_INFO ("subheader " << sub << " dataSizeByte " << dataSizeByte
-                                << " remaining " << data->GetSize () << " frame size " << sub.GetLength ());
-      Ptr<Packet> remainingfragment = data->CreateFragment (0, sub.GetLength ());
-      NS_LOG_INFO ("fragment size " << remainingfragment->GetSize ());
+      NS_LOG_INFO ("subheader " << sub << " remaining " << data->GetSize () << " frame size " << sub.GetLength ());
 
-      // remove the first portion of the packet
-      data->RemoveAtStart (sub.GetLength ());
-      start += sub.GetSerializedSize () + sub.GetLength ();
-      disgregated.push_back (std::make_pair (remainingfragment, sub));
+      if (sub.IsPadding ())
+        {
+          // Padding MUST be the last frame/s in the packet
+          // We can stop parsing.
+          disgregated.push_back (std::make_pair (Create<Packet> (), sub));
+          break;
+        }
+      else
+        {
+          Ptr<Packet> remainingfragment = data->CreateFragment (0, sub.GetLength ());
+          NS_LOG_INFO ("fragment size " << remainingfragment->GetSize ());
+
+          // remove the first portion of the packet
+          data->RemoveAtStart (sub.GetLength ());
+          disgregated.push_back (std::make_pair (remainingfragment, sub));
+        }
     }
-
-
   return disgregated;
 }
 
