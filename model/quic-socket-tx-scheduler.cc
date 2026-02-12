@@ -201,7 +201,7 @@ QuicSocketTxScheduler::GetNewSegment (uint32_t numBytes)
   Ptr<QuicSocketTxItem> currentItem = 0;
   Ptr<QuicSocketTxItem> outItem = CreateObject<QuicSocketTxItem>();
   outItem->m_isStream = true;   // Packets sent with this method are always stream packets
-  outItem->m_isStream0 = false;
+  outItem->m_isCrypto = false;
   outItem->m_packet = Create<Packet> ();
   uint32_t outItemSize = 0;
 

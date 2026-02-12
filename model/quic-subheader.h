@@ -153,6 +153,7 @@ public:
     VERSION_NEGOTIATION_ERROR = 0x09,  // Version negotiation failure
     PROTOCOL_VIOLATION = 0x0A,         // Generic protocol violation
     UNSOLICITED_PATH_ERROR = 0x0B,     // Unsolicited PATH_RESPONSE frame
+    CRYPTO_BUFFER_EXCEEDED = 0x0D,     // Crypto buffer exceeded
     FRAME_ERROR = 0x100                // Specific frame format error [0x100-0x1FF] -> will simply use Frame Error 0x100 as a mask and summing specific TypeFrame_t
   } TransportErrorCodes_t;
 
@@ -314,7 +315,7 @@ public:
    * \param statelessResetToken the 128-bit value that will be used to for a stateless reset when the associated connection ID is used
    * \return the generated QuicSubheader
    */
-  static QuicSubheader CreateNewConnectionId (uint64_t sequence, uint64_t connectionId);     //uint128_t statelessResetToken);
+  static QuicSubheader CreateNewConnectionId (uint64_t sequence, uint64_t connectionId, const uint8_t token[16]);
 
   /**
    * Create a Stop Sending subheader
@@ -361,6 +362,13 @@ public:
    * \return the generated QuicSubheader
    */
   static QuicSubheader CreateCrypto (uint64_t offset, uint64_t length);
+
+  /**
+   * \brief Create a Handshake Done frame
+   *
+   * \return the created QuicSubheader
+   */
+  static QuicSubheader CreateHandshakeDone (void);
 
   /**
    * Create a Stream subheader
@@ -460,6 +468,16 @@ public:
    * \param frameType the frame type for this QuicSubheader
    */
   void SetFrameType (uint8_t frameType);
+
+  /**
+   * \brief Set the frame type to Ping
+   */
+  void SetPing ();
+
+  /**
+   * \brief Set the frame type to Handshake Done
+   */
+  void SetHandshakeDone ();
 
   /**
    * \brief Get the gap vector
@@ -605,9 +623,8 @@ public:
    */
   void SetFirstAckBlock (uint64_t firstAckBlock);
 
-  // TODO: Implement Stateless Reset Token functionality
-  // uint128_t getStatelessResetToken() const;
-  // void SetStatelessResetToken(uint128_t statelessResetToken);
+  void SetStatelessResetToken (const uint8_t token[16]);
+  void GetStatelessResetToken (uint8_t token[16]) const;
 
   /**
    * \brief Check if the subheader is Padding
@@ -718,6 +735,12 @@ public:
   bool IsStream () const;
 
   /**
+   * \brief Check if the subheader is Handshake Done
+   * \return true if the subheader is Handshake Done, false otherwise
+   */
+  bool IsHandshakeDone () const;
+
+  /**
    * \brief Check if the subheader is Stream and the FIN bit is true
    * \return true if the subheader is Stream and the FIN bit is true, false otherwise
    */
@@ -753,7 +776,7 @@ private:
   uint64_t m_maxStreamId;                       //!< Max stream id limit
   uint64_t m_sequence;                          //!< Sequence
   uint64_t m_connectionId;                      //!< Connection id
-  //uint128_t statelessResetToken;              //!< Stateless reset token
+  uint8_t m_statelessResetToken[16];            //!< Stateless reset token
   uint32_t m_largestAcknowledged;               //!< Largest acknowledged
   uint32_t m_ackDelay;                          //!< Ack delay
   uint32_t m_ackBlockCount;                     //!< Ack block count

@@ -46,6 +46,34 @@
 
 namespace ns3 {
 
+struct QuicPacketNumberSpace
+{
+  SequenceNumber32 m_nextTxSequence;
+  SequenceNumber32 m_largestAcked;
+  SequenceNumber32 m_largestReceived;
+  std::vector<SequenceNumber32> m_receivedPacketNumbers;
+  Time m_timeOfLastSentAckElicitingPacket;
+  Time m_lossTime;
+  Time m_lastReceived;
+  bool m_ackElicitingOutstanding;
+  bool m_queue_ack;
+  uint32_t m_numPacketsReceivedSinceLastAckSent;
+  EventId m_sendAckEvent;
+  EventId m_delAckEvent;
+  
+  QuicPacketNumberSpace() : 
+    m_nextTxSequence(0), 
+    m_largestAcked(0), 
+    m_largestReceived(0),
+    m_timeOfLastSentAckElicitingPacket(Seconds(0)),
+    m_lossTime(Seconds(0)),
+    m_lastReceived(Seconds(0)),
+    m_ackElicitingOutstanding(false),
+    m_queue_ack(false),
+    m_numPacketsReceivedSinceLastAckSent(0)
+  {}
+};
+
 class QuicL5Protocol;
 class QuicL4Protocol;
 
@@ -195,6 +223,7 @@ public:
  */
 class QuicSocketBase : public QuicSocket
 {
+  friend class QuicSocketTxBuffer;
 public:
   static const uint16_t MIN_INITIAL_PACKET_SIZE;
 
@@ -252,23 +281,25 @@ public:
    * In this implementation, only ACK, CONNECTION_CLOSE and APPLICATION_CLOSE
    * are supported.
    *
+   * \param p the packet payload of the frame
    * \param sub the QuicSubheader of the control frame
    */
-  void OnReceivedFrame (QuicSubheader &sub);
+  void OnReceivedFrame (Ptr<Packet> p, QuicSubheader &sub, PacketNumberSpace space);
 
   /**
    * \brief Called when an ACK frame is received
    *
    * \param sub the QuicSubheader of the ACK frame
+   * \param space the packet number space
    */
-  void OnReceivedAckFrame (QuicSubheader &sub);
+  void OnReceivedAckFrame (QuicSubheader &sub, PacketNumberSpace space);
 
   /**
    * \brief Called on sending an ACK frame
    *
    * \return the generated ACK frame
    */
-  Ptr<Packet> OnSendingAckFrame ();
+  Ptr<Packet> OnSendingAckFrame (PacketNumberSpace space);
 
   /**
    * \brief Return an object with the transport parameters of this socket
@@ -290,7 +321,7 @@ public:
    * \param frame a smart pointer to a packet
    * \return the size of the frame
    */
-  int AppendingTx (Ptr<Packet> frame);
+  int AppendingTx (Ptr<Packet> frame, PacketNumberSpace space = APPLICATION_DATA);
 
   /**
    * \brief Add a stream frame to the RX buffer and call NotifyDataRecv
@@ -490,7 +521,14 @@ public:
   /**
    * \brief Schedule a queue ACK has if needed
    */
-  void MaybeQueueAck ();
+  void MaybeQueueAck (PacketNumberSpace space);
+
+  /**
+   * \brief Send an ACK frame
+   *
+   * \param space the packet number space for which to send the ACK
+   */
+  void SendAck (PacketNumberSpace space);
 
   /**
    * \brief Callback function to hook to QuicSocketState congestion window
@@ -707,8 +745,7 @@ protected:
    * \param withAck forces an ACK to be sent
    * \returns the number of bytes sent
    */
-  uint32_t SendDataPacket (SequenceNumber32 packetNumber, uint32_t maxSize,
-                           bool withAck);
+  uint32_t SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool withAck);
 
   /**
    * \brief Send a Connection Close frame
@@ -817,11 +854,13 @@ protected:
   Ptr<QuicSocketTxBuffer> m_txBuffer;                     //!< TX buffer
   uint32_t m_socketTxBufferSize;                          //!< Size of the socket TX buffer
   uint32_t m_socketRxBufferSize;                          //!< Size of the socket RX buffer
-  std::vector<SequenceNumber32> m_receivedPacketNumbers;  //!< Received packet number vector
-  TypeId m_schedulingTypeId;                                                      //!< The socket type of the packet scheduler
+  QuicPacketNumberSpace m_pnSpaces[3];                    //!< Per-space packet number tracking
+  TypeId m_schedulingTypeId;                              //!< The socket type of the packet scheduler
   Time m_defaultLatency;                                                                  //!< The default latency bound (only used by the EDF scheduler)
 
   // State-related attributes
+  bool m_handshakeDoneSent;                 //!< True if the Handshake Done frame has been sent
+  TracedValue<bool> m_handshakeConfirmed;   //!< True if the handshake has been confirmed
   TracedValue<QuicStates_t> m_socketState;  //!< State in the Congestion state machine
   uint16_t m_transportErrorCode;            //!< Quic transport error code
   bool m_serverBusy;                        //!< If true, server too busy to accept new connections
@@ -830,6 +869,7 @@ protected:
   uint64_t m_connectionId;                  //!< Connection id
   uint32_t m_vers;                          //!< Quic protocol version
   QuicHeader::KeyPhase_t m_keyPhase;        //!< Key phase
+  bool m_isServer;                          //!< True if the socket is a server
   Time m_lastReceived;                      //!< Time of last received packet
 
   // Transport Parameters values
@@ -838,7 +878,7 @@ protected:
   uint32_t m_initial_max_stream_id_bidi; //!< The the initial maximum number of application-owned bidirectional streams the peer may initiate
   TracedValue<Time> m_idleTimeout;       //!< The idle timeout value in seconds
   bool m_omit_connection_id;             //!< The flag that indicates if the connection id is required in the upcoming connection
-/*uint128_t  m_stateless_reset_token;*/  //!< The stateless reset token
+  uint8_t m_statelessResetToken[16];     //!< The stateless reset token
   uint8_t m_ack_delay_exponent;          //!< The exponent used to decode the ack delay field in the ACK frame
   Time m_max_ack_delay;                  //!< The maximum ack delay we promise to the peer
   uint32_t m_initial_max_stream_id_uni;  //!< The initial maximum number of application-owned unidirectional streams the peer may initiate
@@ -855,8 +895,6 @@ protected:
   EventId m_drainingPeriodEvent;              //!< Event triggered upon idle timeout or immediate connection close, when it expires all closes
   TracedValue<Time> m_pto;                    //!< Probe timeout
   TracedValue<Time> m_drainingPeriodTimeout;  //!< Draining Period timeout
-  EventId m_sendAckEvent;                     //!< Send ACK timeout event
-  EventId m_delAckEvent;                      //!< Delayed ACK timeout event
   bool m_flushOnClose;                        //!< Control behavior on connection close
   bool m_closeOnEmpty;                        //!< True if the socket will close after sending the buffered packets
 
@@ -865,8 +903,6 @@ protected:
   Ptr<TcpCongestionOps> m_congestionControl;      //!< Congestion control
   TracedValue<Time> m_lastRtt;                                 //!< Latest measured RTT
   bool m_quicCongestionControlLegacy;             //!< Quic Congestion control if true, TCP Congestion control if false
-  bool m_queue_ack;                               //!< Indicates a request for a queue ACK if true
-  uint32_t m_numPacketsReceivedSinceLastAckSent;  //!< Number of packets received since last ACK sent
   uint32_t m_lastMaxData;                                                 //!< Last MaxData ACK
   uint32_t m_maxDataInterval;                                     //!< Interval between successive MaxData frames in ACKs
 

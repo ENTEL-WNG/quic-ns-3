@@ -118,14 +118,7 @@ QuicL5Protocol::CreateStream (
       stream->SetStreamDirectionType (streamDirectionType);
     }
 
-  if (stream->GetStreamId () > 0)
-    {
-      stream->SetMaxStreamData (m_socket->GetInitialMaxStreamData ());
-    }
-  else
-    {
-      stream->SetMaxStreamData (UINT32_MAX);
-    }
+  stream->SetMaxStreamData (m_socket->GetInitialMaxStreamData ());
 
   m_streams.push_back (stream);
 
@@ -190,14 +183,14 @@ QuicL5Protocol::DispatchSend (Ptr<Packet> data)
 
   std::vector<Ptr<Packet> > disgregated = DisgregateSend (data);
 
-  std::vector<Ptr<QuicStreamBase> >::iterator jt = m_streams.begin () + 1;   // Avoid Send on stream <0>, which is used only for handshake
+  std::vector<Ptr<QuicStreamBase> >::iterator jt = m_streams.begin ();   // Include stream 0 - all streams are application streams per RFC 9000
 
   for (std::vector<Ptr<Packet> >::iterator it = disgregated.begin ();
        it != disgregated.end (); ++jt)
     {
       if (jt == m_streams.end ())             // Sending Remaining Load
         {
-          jt = m_streams.begin () + 1;
+          jt = m_streams.begin ();
         }
       NS_LOG_LOGIC (
         this << " " << (uint64_t)(*jt)->GetStreamDirectionType () << (uint64_t) QuicStream::SENDER << (uint64_t) QuicStream::BIDIRECTIONAL);
@@ -234,6 +227,11 @@ QuicL5Protocol::DispatchSend (Ptr<Packet> data, uint64_t streamId)
     }
 
   stream = SearchStream (streamId);
+  if (!stream)
+    {
+      NS_LOG_INFO ("Stream creation failed (likely due to connection abort), dropping packet");
+      return -1;
+    }
   int sentData = 0;
 
   if (stream->GetStreamDirectionType () == QuicStream::SENDER
@@ -246,9 +244,9 @@ QuicL5Protocol::DispatchSend (Ptr<Packet> data, uint64_t streamId)
 }
 
 int
-QuicL5Protocol::DispatchRecv (Ptr<Packet> data, Address &address)
+QuicL5Protocol::DispatchRecv (Ptr<Packet> data, Address &address, PacketNumberSpace space)
 {
-  NS_LOG_FUNCTION (this);
+  NS_LOG_FUNCTION (this << space);
   auto disgregated = DisgregateRecv (data);
 
   if (m_socket->CheckIfPacketOverflowMaxDataLimit (disgregated))
@@ -279,13 +277,20 @@ QuicL5Protocol::DispatchRecv (Ptr<Packet> data, Address &address)
           isAckEliciting = true;
         }
 
-      if (sub.GetStreamId () > currStreamNum)
+      if (sub.IsStream () || sub.IsRstStream () || sub.IsMaxStreamData () 
+          || sub.IsStreamBlocked () || sub.IsStopSending ())
         {
-          currStreamNum = sub.GetStreamId ();
+          if (m_streams.empty () || sub.GetStreamId () > currStreamNum)
+            {
+              currStreamNum = sub.GetStreamId ();
+            }
         }
     }
 
-  CreateStream (QuicStream::RECEIVER, currStreamNum);
+  if (!m_streams.empty () || currStreamNum != (uint64_t)-1)
+    {
+      CreateStream (QuicStream::RECEIVER, currStreamNum);
+    }
 
   for (auto it = disgregated.begin (); it != disgregated.end (); ++it)
     {
@@ -299,8 +304,7 @@ QuicL5Protocol::DispatchRecv (Ptr<Packet> data, Address &address)
 
           if (stream
               and (stream->GetStreamDirectionType () == QuicStream::RECEIVER
-                   or stream->GetStreamDirectionType ()
-                   == QuicStream::BIDIRECTIONAL))
+                   or stream->GetStreamDirectionType () == QuicStream::BIDIRECTIONAL))
             {
               NS_LOG_INFO (
                 "Receiving frame on stream " << stream->GetStreamId () <<
@@ -312,8 +316,8 @@ QuicL5Protocol::DispatchRecv (Ptr<Packet> data, Address &address)
         {
           NS_LOG_INFO (
             "Receiving frame on stream " << sub.GetStreamId () <<
-              " trigger socket");
-          m_socket->OnReceivedFrame (sub);
+              " trigger socket in space " << space);
+          m_socket->OnReceivedFrame ((*it).first, sub, space);
         }
     }
 
@@ -349,15 +353,15 @@ QuicL5Protocol::DisgregateSend (Ptr<Packet> data)
   std::vector< Ptr<Packet> > disgregated;
   //data->Print(std::cout);
 
-  if (m_streams.size () <= 1)
+  if (m_streams.size () < 1)
     {
       NS_LOG_WARN ("No application streams available to send data");
       return disgregated;
     }
 
-  // Equally distribute load on all streams except on stream 0
-  uint32_t loadPerStream = dataSizeByte / (m_streams.size () - 1);
-  uint32_t remainingLoad = dataSizeByte - loadPerStream * (m_streams.size () - 1);
+  // Equally distribute load on all streams (stream 0 is a normal application stream per RFC 9000)
+  uint32_t loadPerStream = dataSizeByte / m_streams.size ();
+  uint32_t remainingLoad = dataSizeByte - loadPerStream * m_streams.size ();
   if (loadPerStream < 1)
     {
       loadPerStream = 1;
@@ -487,10 +491,7 @@ QuicL5Protocol::UpdateInitialMaxStreamData (uint32_t newMaxStreamData)
   // TODO handle in a different way bidirectional and unidirectional streams
   for (auto stream : m_streams)
     {
-      if (stream->GetStreamId () > 0) // stream 0 is set to UINT32_MAX and not modified
-        {
-          stream->SetMaxStreamData (newMaxStreamData);
-        }
+      stream->SetMaxStreamData (newMaxStreamData);
     }
 }
 
@@ -498,13 +499,7 @@ uint64_t
 QuicL5Protocol::GetMaxData ()
 {
   NS_LOG_FUNCTION (this);
-
-  uint64_t maxData = 0;
-  for (auto stream : m_streams)
-    {
-      maxData += stream->SendMaxStreamData ();
-    }
-  return maxData;
+  return m_socket->GetConnectionMaxData ();
 }
 
 } // namespace ns3

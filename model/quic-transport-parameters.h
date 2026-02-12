@@ -74,6 +74,8 @@ public:
     ACK_DELAY_EXPONENT = 0x0a,
     MAX_ACK_DELAY = 0x0b,
     DISABLE_ACTIVE_MIGRATION = 0x0c,
+    ORIGINAL_DESTINATION_CONNECTION_ID = 0x00,
+    INITIAL_SOURCE_CONNECTION_ID = 0x0f,
     ACTIVE_CONNECTION_ID_LIMIT = 0x0e
   } TransportParameterId_t;
 
@@ -108,10 +110,11 @@ public:
    * \param max_packet_size the limit on the size of packets that the endpoint is willing to receive
    * \param ack_delay_exponent the exponent used to decode the ack delay field in the ACK frame
    * \param initial_max_stream_id_uni the initial maximum number of application-owned unidirectional streams the peer may initiate
+   * \param disable_migration true if migration should be disabled
    * \return the generated QuicTransportParameters
    */
   static QuicTransportParameters CreateTransportParameters (uint32_t initial_max_stream_data, uint32_t initial_max_data, uint32_t initial_max_stream_id_bidi, uint16_t idleTimeout,
-                                                            uint8_t omit_connection, uint16_t max_packet_size, uint8_t ack_delay_exponent, uint16_t max_ack_delay, uint32_t initial_max_stream_id_uni);
+                                                            uint8_t omit_connection, uint16_t max_packet_size, uint8_t ack_delay_exponent, uint16_t max_ack_delay, uint32_t initial_max_stream_id_uni, bool disable_migration = true);
 
   // Getters, Setters and Controls
 
@@ -233,7 +236,57 @@ public:
    * \brief Set the max ack delay
    * \param maxAckDelay the max ack delay for this QuicTransportParameters
    */
+  /**
+   * \brief Set the max ack delay
+   * \param maxAckDelay the max ack delay for this QuicTransportParameters
+   */
   void SetMaxAckDelay (uint16_t maxAckDelay);
+
+  /**
+   * \brief Set the disable active migration flag
+   * \param disable true to disable migration
+   */
+  void SetDisableActiveMigration (bool disable);
+
+  /**
+   * \brief Get the disable active migration flag
+   * \return true if migration is disabled
+   */
+  bool GetDisableActiveMigration () const;
+
+  /**
+   * \brief Set the initial source connection ID
+   * \param cid the connection ID
+   */
+  void SetInitialSourceConnectionId (uint64_t cid);
+
+  /**
+   * \brief Get the initial source connection ID
+   * \return the connection ID
+   */
+  uint64_t GetInitialSourceConnectionId () const;
+
+  /**
+   * \brief Set the original destination connection ID
+   * \param cid the connection ID
+   */
+  void SetOriginalDestinationConnectionId (uint64_t cid);
+
+  /**
+   * \brief Get the original destination connection ID
+   * \return the connection ID
+   */
+  uint64_t GetOriginalDestinationConnectionId () const;
+
+  /**
+   * \brief Check if initial source CID is set
+   */
+  bool HasInitialSourceConnectionId () const;
+
+  /**
+   * \brief Check if original destination CID is set
+   */
+  bool HasOriginalDestinationConnectionId () const;
 
   /**
    * Comparison operator
@@ -263,6 +316,11 @@ private:
   uint8_t m_ack_delay_exponent;           //!< The exponent used to decode the ack delay field in the ACK frame
   uint16_t m_max_ack_delay;               //!< The maximum amount of time in milliseconds by which the endpoint will delay sending acknowledgments
   uint32_t m_initial_max_stream_id_uni;   //!< The initial maximum number of application-owned unidirectional streams the peer may initiate
+  bool m_disableActiveMigration = false;  //!< If true, the endpoint does not support migration
+  uint64_t m_initialSourceConnectionId = 0;
+  bool m_hasInitialSourceConnectionId = false;
+  uint64_t m_originalDestinationConnectionId = 0;
+  bool m_hasOriginalDestinationConnectionId = false;
   bool m_hasStatelessResetToken;          //!< Flag to indicate if a stateless reset token was provided
 };
 

@@ -57,6 +57,7 @@ QuicSubheader::QuicSubheader ()
   m_reasonPhrase = std::vector<uint8_t> ();
   m_additionalAckBlocks = std::vector<uint32_t> ();
   m_gaps = std::vector<uint32_t> ();
+  for (int i = 0; i < 16; i++) m_statelessResetToken[i] = 0;
 }
 
 QuicSubheader::~QuicSubheader ()
@@ -388,7 +389,7 @@ QuicSubheader::Serialize (Buffer::Iterator start) const
         WriteVarInt64 (i, 0); // Retire Prior To
         i.WriteU8 (8); // CID length
         i.WriteHtonU64 (m_connectionId);
-        for (int j = 0; j < 16; j++) i.WriteU8 (0); // Stateless Reset Token
+        for (int j = 0; j < 16; j++) i.WriteU8 (m_statelessResetToken[j]); // Stateless Reset Token
         break;
 
       case RETIRE_CONNECTION_ID:
@@ -526,7 +527,7 @@ QuicSubheader::Deserialize (Buffer::Iterator start)
           if (len == 8) m_connectionId = i.ReadNtohU64 ();
           else i.Next (len);
         }
-        i.Next (16); // Stateless Reset Token
+        for (int j = 0; j < 16; j++) m_statelessResetToken[j] = i.ReadU8 (); // Stateless Reset Token
         break;
 
       case RETIRE_CONNECTION_ID:
@@ -1027,6 +1028,17 @@ QuicSubheader::CreatePing (void)
 }
 
 QuicSubheader
+QuicSubheader::CreateHandshakeDone (void)
+{
+  NS_LOG_INFO ("Created HandshakeDone Header");
+
+  QuicSubheader sub;
+  sub.SetFrameType (HANDSHAKE_DONE);
+
+  return sub;
+}
+
+QuicSubheader
 QuicSubheader::CreateBlocked (uint64_t offset)
 {
   NS_LOG_INFO ("Created Blocked Header");
@@ -1064,7 +1076,7 @@ QuicSubheader::CreateStreamIdBlocked (uint64_t streamId)
 }
 
 QuicSubheader
-QuicSubheader::CreateNewConnectionId (uint64_t sequence, uint64_t connectionId) //uint128_t statelessResetToken);
+QuicSubheader::CreateNewConnectionId (uint64_t sequence, uint64_t connectionId, const uint8_t token[16])
 {
   NS_LOG_INFO ("Created NewConnectionId Header");
 
@@ -1072,6 +1084,7 @@ QuicSubheader::CreateNewConnectionId (uint64_t sequence, uint64_t connectionId) 
   sub.SetFrameType (NEW_CONNECTION_ID);
   sub.SetSequence (sequence);
   sub.SetConnectionId (connectionId);
+  sub.SetStatelessResetToken (token);
 
   return sub;
 }
@@ -1248,7 +1261,28 @@ uint16_t QuicSubheader::GetErrorCode () const
   return m_errorCode;
 }
 
-void QuicSubheader::SetErrorCode (uint16_t errorCode)
+void
+QuicSubheader::SetPing ()
+{
+  NS_LOG_FUNCTION (this);
+  m_frameType = PING;
+}
+
+void
+QuicSubheader::SetHandshakeDone ()
+{
+  NS_LOG_FUNCTION (this);
+  m_frameType = HANDSHAKE_DONE;
+}
+
+bool
+QuicSubheader::IsHandshakeDone () const
+{
+  return (m_frameType == HANDSHAKE_DONE);
+}
+
+void
+QuicSubheader::SetErrorCode (uint16_t errorCode)
 {
   m_errorCode = errorCode;
 }
@@ -1373,13 +1407,15 @@ void QuicSubheader::SetStreamId (uint64_t streamId)
   m_streamId = streamId;
 }
 
-//uint128_t QuicSubheader::getStatelessResetToken() const {
-//	return m_statelessResetToken;
-//}
-//
-//void QuicSubheader::SetStatelessResetToken(uint128_t statelessResetToken) {
-//	m_statelessResetToken = statelessResetToken;
-//}
+void QuicSubheader::GetStatelessResetToken (uint8_t token[16]) const
+{
+  for (int i = 0; i < 16; i++) token[i] = m_statelessResetToken[i];
+}
+
+void QuicSubheader::SetStatelessResetToken (const uint8_t token[16])
+{
+  for (int i = 0; i < 16; i++) m_statelessResetToken[i] = token[i];
+}
 
 uint64_t QuicSubheader::GetFirstAckBlock () const
 {

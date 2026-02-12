@@ -267,7 +267,7 @@ uint32_t
 QuicStreamBase::AvailableWindow () const
 {
   NS_LOG_FUNCTION (this);
-  uint32_t streamRWnd = (m_streamId != 0) ? StreamWindow () : m_maxStreamData;
+  uint32_t streamRWnd = StreamWindow ();
   return streamRWnd;
 }
 
@@ -292,13 +292,6 @@ QuicStreamBase::Recv (Ptr<Packet> frame, const QuicSubheader& sub, Address &addr
 
     case QuicSubheader::RESET_STREAM:
       // TODO reset and close this stream
-      if (m_streamId == 0)
-        {
-          m_quicl5->SignalAbortConnection (QuicSubheader::TransportErrorCodes_t::PROTOCOL_VIOLATION,
-                                           "Received RESET_STREAM in Stream 0");
-          return -1;
-        }
-
       if (!(m_streamDirectionType == RECEIVER or m_streamDirectionType == BIDIRECTIONAL))
         {
           m_quicl5->SignalAbortConnection (QuicSubheader::TransportErrorCodes_t::PROTOCOL_VIOLATION,
@@ -362,13 +355,9 @@ QuicStreamBase::Recv (Ptr<Packet> frame, const QuicSubheader& sub, Address &addr
       break;
 
     case QuicSubheader::CRYPTO:
-      if (m_streamId != 0)
-        {
-          m_quicl5->SignalAbortConnection (QuicSubheader::TransportErrorCodes_t::PROTOCOL_VIOLATION,
-                                           "Received CRYPTO frame in non-stream 0");
-          return -1;
-        }
-      NS_LOG_INFO ("Received CRYPTO frame in Stream 0");
+      // RFC 9000: CRYPTO frames are handled at the socket level, not at the stream level.
+      // They should not be routed to any stream. If we get here, it's a protocol violation.
+      NS_LOG_INFO ("Received CRYPTO frame, processing transport parameters");
       if (m_quicl5->ContainsTransportParameters ()) 
         {
           QuicTransportParameters transport;
@@ -412,13 +401,6 @@ QuicStreamBase::Recv (Ptr<Packet> frame, const QuicSubheader& sub, Address &addr
 
           m_fin = sub.IsStreamFin ();
 
-          if (m_fin && m_streamId == 0)
-            {
-              m_quicl5->SignalAbortConnection (QuicSubheader::TransportErrorCodes_t::PROTOCOL_VIOLATION,
-                                               "Received Stream FIN in Stream 0");
-              return -1;
-            }
-
           SetStreamStateRecvIf (m_streamStateRecv == RECV and m_fin, SIZE_KNOWN);
 
           if (m_recvSize == sub.GetOffset ()) 
@@ -451,14 +433,7 @@ QuicStreamBase::Recv (Ptr<Packet> frame, const QuicSubheader& sub, Address &addr
 
               SetStreamStateRecvIf (m_streamStateRecv == SIZE_KNOWN and m_rxBuffer->Size () == 0, DATA_RECVD);
 
-              if (m_streamId != 0 )
-                {
-                  m_quicl5->Recv (frame, address);
-                }
-              else
-                {
-                  NS_LOG_INFO ("Received handshake Message in Stream 0");
-                }
+              m_quicl5->Recv (frame, address);
 
               SetStreamStateRecvIf (m_streamStateRecv == DATA_RECVD, DATA_READ);
 

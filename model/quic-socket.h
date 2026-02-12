@@ -53,6 +53,13 @@
 
 namespace ns3 {
 
+enum PacketNumberSpace
+{
+  INITIAL_DATA = 0,
+  HANDSHAKE_DATA = 1,
+  APPLICATION_DATA = 2
+};
+
 /**
  * \ingroup socket
  * \ingroup quic

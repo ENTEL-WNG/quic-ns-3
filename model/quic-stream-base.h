@@ -87,14 +87,13 @@ public:
    * \brief Perform flow control by checking the available window
    *   according to what was negotiated with the other endpoint
    *   and the bytes in flight.
-   * \warning This method handles differently stream 0 and the other streams.
    *
    * \return the available window for the transmission
    */
   uint32_t AvailableWindow () const;
 
   /**
-   * \brief Compute the stream window for streams different from 0
+   * \brief Compute the stream window
    *
    * \return the amount of data that can be sent on the stream
    */

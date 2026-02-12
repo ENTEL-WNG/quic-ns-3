@@ -28,6 +28,7 @@
 #include "quic-transport-parameters.h"
 #include "quic-stream.h"
 #include "quic-subheader.h"
+#include "quic-socket.h"
 
 
 namespace ns3 {
@@ -94,7 +95,7 @@ public:
   /**
    * \brief Send a packet to the streams associated to this L5 protocol
    *
-   * The streams are created if not present. Stream 0 is not used (only for handshake)
+   * The streams are created if not present. All streams are available for application data per RFC 9000.
    *
    * \param data a smart pointer to a packet
    * \return always 0
@@ -119,11 +120,11 @@ public:
    * If a frame needs to be processed by the socket, it is sent back to the socket,
    * otherwise is forwarded to the correct stream
    *
-   * \param data a smart pointer to a Packet
+   * \param packet a smart pointer to a Packet
    * \param address the sender address
    * \return 0 if the received packet was ACK-only, -1 in case of errors, 1 if everything was OK;
    */
-  int DispatchRecv (Ptr<Packet> data, Address &address);
+  int DispatchRecv (Ptr<Packet> packet, Address &address, PacketNumberSpace space);
 
   //int DispatchRecv(Ptr<Packet> data, uint64_t streamId, Address &address);
 

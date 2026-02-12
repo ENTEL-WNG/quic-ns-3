@@ -69,7 +69,7 @@ private:
   /** \brief Test the edge cases for adding packets */
   void
   TestAddBlocks ();
-  /** \brief Test the handling of Stream 0 packets */
+  /** \brief Test the handling of CRYPTO frame packets */
   void
   TestStream0 ();
   /** \brief Test the insertion of packets in the Stream TX buffer */
@@ -145,7 +145,7 @@ QuicTxBufferTestCase::DoRun ()
   /*
    * Edge cases of the block adding function:
    * -> add 1 block
-   * -> add a Stream 0 packet
+   * -> add a CRYPTO frame packet
    * -> acknowledge everything
    * -> check correctness of bytes in flight count
    *
@@ -885,8 +885,7 @@ QuicTxBufferTestCase::TestStream0 ()
   Ptr<Packet> p2 = Copy (p1);
   QuicSubheader sub = QuicSubheader::CreateStreamSubHeader (1, 0, p1->GetSize (), false,
                                                    true, false);
-  QuicSubheader sub0 = QuicSubheader::CreateStreamSubHeader (0, 0, p1->GetSize (), false,
-                                                    true, false);
+  QuicSubheader sub0 = QuicSubheader::CreateCrypto (0, p1->GetSize ());
   p1->AddHeader (sub);
   p2->AddHeader (sub0);
 
@@ -903,7 +902,7 @@ QuicTxBufferTestCase::TestStream0 ()
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 1200,
                         "TxBuf miscalculates size of in flight segments");
 
-  Ptr<Packet> ptx2 = txBuf.NextStream0Sequence (SequenceNumber32 (2));
+  Ptr<Packet> ptx2 = txBuf.NextCryptoSequence (SequenceNumber32 (2));
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 2400,
                         "TxBuf miscalculates size of in flight segments");
 
@@ -921,7 +920,7 @@ QuicTxBufferTestCase::TestStream0 ()
                                                             largestAcknowledged,
                                                             additionalAckBlocks,
                                                             gaps);
-  // Packet 1 is acked, so packets 2 (stream 0) and 3 (stream 1) remain in flight
+  // Packet 1 is acked, so packets 2 (CRYPTO) and 3 (stream 1) remain in flight
   NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (), 2400,
                         "TxBuf miscalculates size of in flight segments");
 
