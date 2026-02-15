@@ -65,7 +65,13 @@ QuicSocketTxItem::QuicSocketTxItem ()
     m_isStream (false),
     m_isCrypto (false),
     m_lastSent (Time::Min ()),
-    m_wireSize (0)
+    m_delivered (0),
+    m_deliveredTime (Time::Max ()),
+    m_firstSentTime (Seconds (0)),
+    m_isAppLimited (false),
+    m_ackBytesSent (0),
+    m_wireBytes (0),
+    m_payloadBytes (0)
 {
   m_generated = Simulator::Now ();
 }
@@ -81,7 +87,8 @@ QuicSocketTxItem::QuicSocketTxItem (const QuicSocketTxItem &other)
     m_isCrypto (other.m_isCrypto),
     m_lastSent (other.m_lastSent),
     m_generated (other.m_generated),
-    m_wireSize (other.m_wireSize)
+    m_wireBytes (other.m_wireBytes),
+    m_payloadBytes(other.m_payloadBytes)
 {
   m_packet = other.m_packet->Copy ();
 }
@@ -104,6 +111,20 @@ void QuicSocketTxItem::Print (std::ostream &os) const
     {
       os << "|ackd|";
     }
+}
+
+uint32_t 
+QuicSocketTxItem::GetStreamPayloadSize () const
+{
+  NS_LOG_FUNCTION (this);
+  
+  if (!m_isStream)
+    {
+      return 0; // Non-STREAM frames don't count toward flow control
+    }
+  
+  // For STREAM frames, the payload is stored in m_payloadBytes
+  return m_payloadBytes;
 }
 
 void QuicSocketTxItem::MergeItems (QuicSocketTxItem &t1, QuicSocketTxItem &t2)
@@ -323,6 +344,11 @@ Ptr<Packet> QuicSocketTxBuffer::NextCryptoSequence (
       outItem->m_lastSent = Now ();
       outItem->m_packet = currentPacket;
       outItem->m_isCrypto = (*it)->m_isCrypto;
+      
+      // CRYPTO frames don't count toward flow control, only wire size matters
+      outItem->m_wireBytes = currentPacket->GetSize ();
+      outItem->m_payloadBytes = 0;
+      
       m_cryptoList[space].erase (it);
       m_cryptoSize -= currentPacket->GetSize ();
       m_sentList[space].insert (m_sentList[space].end (), outItem);
@@ -368,14 +394,60 @@ Ptr<QuicSocketTxItem> QuicSocketTxBuffer::GetNewSegment (uint32_t numBytes, Pack
     {
       NS_LOG_LOGIC ("Adding packet to sent buffer");
       outItem->m_space = space;
+      
+      // Extract payload size from ALL STREAM frames in the packet
+      outItem->m_wireBytes = outItem->m_packet->GetSize ();
+      outItem->m_payloadBytes = 0;
+      
+      if (outItem->m_isStream)
+        {
+          // Parse ALL frames in the packet to sum STREAM payloads
+          Ptr<Packet> tempPacket = outItem->m_packet->Copy ();
+          
+          while (tempPacket->GetSize () > 0)
+            {
+              QuicSubheader sub;
+              tempPacket->RemoveHeader (sub);
+              
+              if (sub.IsStream ())
+                {
+                  // Add this STREAM frame's payload
+                  outItem->m_payloadBytes += sub.GetLength ();
+                }
+              
+              if (sub.IsPadding ())
+                {
+                  // Padding is always last
+                  break;
+                }
+              else
+                {
+                  // Skip the frame data
+                  uint32_t frameDataSize = sub.GetLength ();
+                  if (frameDataSize > 0 && tempPacket->GetSize () >= frameDataSize)
+                    {
+                      tempPacket->RemoveAtStart (frameDataSize);
+                    }
+                  else if (frameDataSize > 0)
+                    {
+                      NS_LOG_WARN ("Frame data size " << frameDataSize 
+                                   << " exceeds remaining packet size " 
+                                   << tempPacket->GetSize ());
+                      break;
+                    }
+                }
+            }
+          
+          NS_LOG_INFO ("Packet has total STREAM payload: " << outItem->m_payloadBytes
+                      << " bytes (wire size: " << outItem->m_wireBytes << ")");
+        }
+      
       m_sentList[space].insert (m_sentList[space].end (), outItem);
-      m_sentSize += outItem->m_packet->GetSize ();
+      m_sentSize += outItem->m_wireBytes;
     }
 
   NS_LOG_INFO (
-    "Update: Sent Size = " << m_sentSize << " remaining App Size " << m_scheduler->AppSize () << " object size " << outItem->m_packet->GetSize ());
-
-  //Print(std::cout);
+    "Update: Sent Size = " << m_sentSize << " remaining App Size " << m_scheduler->AppSize ());
 
   return outItem;
 }
@@ -498,6 +570,12 @@ std::vector<Ptr<QuicSocketTxItem> > QuicSocketTxBuffer::OnAckUpdate (
 
   // Clean up acked packets and return new ACKed packet vector
   CleanSentList (space);
+  // Clear loss detection variables if no data in flight
+  if (BytesInFlight(space) == 0)
+  {
+      m_socket->m_pnSpaces[space].m_ackElicitingOutstanding = false;
+      m_socket->m_pnSpaces[space].m_lossTime = Seconds(0);
+  }
   return newlyAcked;
 }
 
@@ -559,7 +637,17 @@ uint32_t QuicSocketTxBuffer::Retransmission (SequenceNumber32 packetNumber, Pack
           retx->m_lost = false;
           retx->m_retrans = true;
           toRetx += retx->m_packet->GetSize ();
-          m_sentSize -= retx->m_packet->GetSize ();
+          // Subtract the tracked wire bytes of the LOST item
+          if (m_sentSize >= item->m_wireBytes)
+            {
+              m_sentSize -= item->m_wireBytes;
+            }
+          else
+            {
+              m_sentSize = 0;
+              NS_LOG_WARN("m_sentSize underflow detected in Retransmission");
+            }
+            
           if (retx->m_isCrypto)
             {
               NS_LOG_INFO ("Lost CRYPTO frame packet, re-inserting in list");
@@ -582,6 +670,14 @@ uint32_t QuicSocketTxBuffer::Retransmission (SequenceNumber32 packetNumber, Pack
       Ptr<QuicSocketTxItem> item = *sent_it;
       if (item->m_lost)
         {
+          uint32_t bytesToRemove = item->m_wireBytes > 0 ? item->m_wireBytes : item->m_packet->GetSize();
+          
+          if (m_sentSize >= bytesToRemove) {
+              m_sentSize -= bytesToRemove;
+          } else {
+              m_sentSize = 0;
+              NS_LOG_WARN("m_sentSize underflow detected in Retransmission");
+          }
           // Remove lost packet from sent vector
           sent_it = m_sentList[space].erase (sent_it);
         }
@@ -635,6 +731,9 @@ std::vector<Ptr<QuicSocketTxItem> > QuicSocketTxBuffer::DetectLostPackets (Ptr<T
         {
           // Update the loss timer for future checks
           Time expected_loss_time = unacked->m_lastSent + loss_delay;
+          if (expected_loss_time <= Now()) {
+              expected_loss_time = Now() + tcbd->m_kGranularity;
+          }
           if (m_socket->m_pnSpaces[space].m_lossTime == Seconds (0) || expected_loss_time < m_socket->m_pnSpaces[space].m_lossTime) {
               m_socket->m_pnSpaces[space].m_lossTime = expected_loss_time;
           }
@@ -664,25 +763,47 @@ uint32_t QuicSocketTxBuffer::GetLost ()
 
 void QuicSocketTxBuffer::CleanSentList (PacketNumberSpace space)
 {
-  NS_LOG_FUNCTION (this << space);
   auto sent_it = m_sentList[space].begin ();
-  // All packets up to here are ACKed (already sent to the receiver app)
-  while (!m_sentList[space].empty () && (*sent_it)->m_sacked && !(*sent_it)->m_lost)
+  while (sent_it != m_sentList[space].end ())
     {
-      // Remove ACKed packet from sent vector
       Ptr<QuicSocketTxItem> item = *sent_it;
-      item->m_acked = true;
-      m_sentSize -= item->m_packet->GetSize ();
-      NS_LOG_LOGIC (
-        "Packet " << item->m_packetNumber << " in space " << space << " received and ACKed. Removing from sent buffer");
-      m_sentList[space].erase (sent_it);
-      sent_it = m_sentList[space].begin ();
+      // Only clean if Sacked (leave Lost for Retransmission)
+      if (item->m_sacked) 
+        {
+          item->m_acked = true;
+          // Subtract the tracked wire bytes
+          // Use logic to prevent underflow if logic ever desyncs
+          if (m_sentSize >= item->m_wireBytes)
+            {
+            m_sentSize -= item->m_wireBytes;
+            }
+          else
+            {
+            m_sentSize = 0;
+            NS_LOG_WARN("m_sentSize underflow detected in CleanSentList");
+            }
+            
+          sent_it = m_sentList[space].erase (sent_it);
+          NS_LOG_LOGIC ("Cleaning packet " << item->m_packetNumber << " from sent buffer");
+        }
+      else
+        {
+          sent_it++;
+        }
     }
 }
 
 uint32_t QuicSocketTxBuffer::Available (void) const
 {
-  return m_maxBuffer - m_cryptoSize - m_scheduler->AppSize ();
+  uint32_t appSize = m_scheduler->AppSize ();
+  uint32_t totalUsed = m_cryptoSize + appSize + m_sentSize;
+  
+  if (totalUsed >= m_maxBuffer)
+    {
+      return 0;
+    }
+  
+  return m_maxBuffer - totalUsed;
 }
 
 uint32_t QuicSocketTxBuffer::GetMaxBufferSize (void) const
@@ -726,7 +847,7 @@ uint32_t QuicSocketTxBuffer::BytesInFlight (PacketNumberSpace space) const
     {
       if (!(*sent_it)->m_sacked && !(*sent_it)->m_lost)
         {
-          inFlight += (*sent_it)->m_wireSize > 0 ? (*sent_it)->m_wireSize : (*sent_it)->m_packet->GetSize ();
+          inFlight += (*sent_it)->m_wireBytes > 0 ? (*sent_it)->m_wireBytes : (*sent_it)->m_packet->GetSize ();
         }
     }
   return inFlight;
@@ -743,7 +864,7 @@ uint32_t QuicSocketTxBuffer::GetCongestionControlledBytesInFlight () const
     {
       if (!(*sent_it)->m_sacked && !(*sent_it)->m_lost)
         {
-          inFlight += (*sent_it)->m_wireSize > 0 ? (*sent_it)->m_wireSize : (*sent_it)->m_packet->GetSize ();
+          inFlight += (*sent_it)->m_wireBytes > 0 ? (*sent_it)->m_wireBytes : (*sent_it)->m_packet->GetSize ();
         }
     }
   return inFlight;
@@ -760,7 +881,7 @@ uint32_t QuicSocketTxBuffer::GetHandshakeInFlight () const
         {
           if (!(*sent_it)->m_sacked && !(*sent_it)->m_lost)
             {
-              inFlight += (*sent_it)->m_wireSize > 0 ? (*sent_it)->m_wireSize : (*sent_it)->m_packet->GetSize ();
+              inFlight += (*sent_it)->m_wireBytes > 0 ? (*sent_it)->m_wireBytes : (*sent_it)->m_packet->GetSize ();
             }
         }
     }
@@ -814,7 +935,18 @@ void QuicSocketTxBuffer::UpdatePacketSent (SequenceNumber32 seq, uint32_t sz, Pa
       NS_LOG_WARN ("Packet " << seq << " in space " << space << " not found in sent list during UpdatePacketSent");
       return;
     }
-  item->m_wireSize = sz;
+  if (m_sentSize >= item->m_wireBytes)
+    {
+      m_sentSize -= item->m_wireBytes;
+    } 
+  else
+    {
+      m_sentSize = 0;
+      NS_LOG_WARN("m_sentSize underflow detected in UpdatePacketSent");
+    }
+
+  m_sentSize += sz;
+  item->m_wireBytes = sz;
   item->m_firstSentTime = m_tcb->m_firstSentTime;
   item->m_deliveredTime = m_tcb->m_deliveredTime;
   item->m_isAppLimited = (m_tcb->m_appLimitedUntil > m_tcb->m_delivered);
@@ -858,8 +990,13 @@ QuicSocketTxBuffer::UpdateRateSample (Ptr<QuicSocketTxItem> item)
       return;
     }
 
-  m_tcb->m_delivered         += item->m_packet->GetSize ();
+  // RFC 9000: m_delivered tracks STREAM payload bytes only for flow control
+  // CRYPTO and other frames don't count (m_payloadBytes = 0 for those)
+  m_tcb->m_delivered         += item->m_payloadBytes;
   m_tcb->m_deliveredTime      = Simulator::Now ();
+  
+  NS_LOG_INFO ("Delivered " << item->m_payloadBytes << " payload bytes (total delivered: " 
+               << m_tcb->m_delivered << ")");
 
   if (item->m_delivered > m_rs.m_priorDelivered)
     {
@@ -956,6 +1093,29 @@ void QuicSocketTxBuffer::SetDefaultLatency (Time latency)
 Time QuicSocketTxBuffer::GetDefaultLatency ()
 {
   return GetLatency (0);
+}
+
+uint32_t
+QuicSocketTxBuffer::GetPayloadBytesInFlight () const
+{
+  NS_LOG_FUNCTION (this);
+  
+  uint32_t payloadBytesInFlight = 0;
+  // Sum up payload bytes across all packet number spaces
+  for (uint32_t space = 0; space < 3; ++space)
+    {
+      for (auto it = m_sentList[space].begin (); it != m_sentList[space].end (); ++it)
+        {
+          Ptr<QuicSocketTxItem> item = *it;
+          if (!item->m_sacked && !item->m_lost)
+            {
+              payloadBytesInFlight += item->GetStreamPayloadSize ();
+            }
+        }
+    }
+  
+  NS_LOG_INFO ("Payload bytes in flight: " << payloadBytesInFlight);
+  return payloadBytesInFlight;
 }
 
 }

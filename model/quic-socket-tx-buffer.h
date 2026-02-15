@@ -77,6 +77,17 @@ public:
   QuicSocketTxItem (const QuicSocketTxItem &other);
 
   /**
+   * \brief Get the payload size of the STREAM frame.
+   *
+   * This method returns the payload size specifically for STREAM frames.
+   * If the QuicSocketTxItem does not represent a STREAM frame (i.e., m_isStream is false),
+   * it returns 0 as non-STREAM frames do not count towards flow control in this context.
+   *
+   * \return The payload size of the STREAM frame in bytes, or 0 if it's not a STREAM frame.
+   */
+  uint32_t GetStreamPayloadSize () const;
+
+  /**
    * \brief Merge two QuicSocketTxItem
    *
    * Merge t2 in t1. It consists in copying the lastSent field if t2 is more
@@ -98,25 +109,26 @@ public:
    */
   void Print (std::ostream &os) const;
 
-  Ptr<Packet> m_packet;              //!< packet associated to this QuicSocketTxItem
-  SequenceNumber32 m_packetNumber;        //!< sequence number
+  Ptr<Packet> m_packet;                           //!< packet associated to this QuicSocketTxItem
+  SequenceNumber32 m_packetNumber;                //!< sequence number
   PacketNumberSpace m_space { APPLICATION_DATA }; //!< Packet number space
-  bool m_lost;                            //!< true if the packet is lost
-  bool m_retrans;                         //!< true if it is a retx
-  bool m_sacked;                          //!< true if already acknowledged
-  bool m_acked;                       //!< true if already passed to the application
-  bool m_isStream;                    //!< true for frames of a stream (not control)
-  bool m_isCrypto;                        //!< true for a CRYPTO frame (handshake data)
-  Time m_lastSent;                        //!< time at which it was sent
-  Time m_ackTime;       //!< time at which the packet was first acked (if m_sacked is true)
-  Time m_generated;       //!< expiration deadline for the TX item
+  bool m_lost;                                    //!< true if the packet is lost
+  bool m_retrans;                                 //!< true if it is a retx
+  bool m_sacked;                                  //!< true if already acknowledged
+  bool m_acked;                                   //!< true if already passed to the application
+  bool m_isStream;                                //!< true if the packet contains STREAM frames (application data)
+  bool m_isCrypto;                                //!< true if the packet contains CRYPTO frames (handshake data)
+  Time m_lastSent;                                //!< time at which it was sent
+  Time m_ackTime;                                 //!< time at which the packet was first acked (if m_sacked is true)
+  Time m_generated;                               //!< expiration deadline for the TX item
 
-  uint64_t m_delivered { 0 };       //!< Connection's delivered data at the time the packet was sent
-  Time m_deliveredTime { Time::Max () };      //!< Connection's delivered time at the time the packet was sent
-  Time m_firstSentTime { Seconds (0) };      //!< Connection's first sent time at the time the packet was sent
-  bool m_isAppLimited { false };       //!< Connection's app limited at the time the packet was sent
-  uint32_t m_ackBytesSent { 0 };       //!< Connection's ACK-only bytes sent at the time the packet was sent
-  uint32_t m_wireSize { 0 };           //!< Full wire size (including headers)
+  uint64_t m_delivered;                           //!< Connection's delivered data at the time the packet was sent
+  Time m_deliveredTime;                           //!< Connection's delivered time at the time the packet was sent
+  Time m_firstSentTime;                           //!< Connection's first sent time at the time the packet was sent
+  bool m_isAppLimited;                            //!< Connection's app limited at the time the packet was sent
+  uint32_t m_ackBytesSent;                        //!< Connection's ACK-only bytes sent at the time the packet was sent
+  uint32_t m_wireBytes;                           //!< Full wire size (including headers)
+  uint32_t m_payloadBytes;                        //!< Total STREAM frame payload bytes within this packet.
 };
 
 /**
@@ -383,6 +395,18 @@ public:
    */
   Time GetDefaultLatency ();
 
+    /**
+   * \brief Return the total number of STREAM payload bytes in flight.
+   *
+   * This method calculates the sum of payload bytes for all packets
+   * that have been sent but not yet acknowledged and are not marked as lost.
+   * This value represents the amount of application data currently awaiting
+   * acknowledgment.
+   *
+   * \return The total number of payload bytes in flight.
+   */
+  uint32_t GetPayloadBytesInFlight () const;
+
 private:
   typedef std::list<Ptr<QuicSocketTxItem> > QuicTxPacketList;      //!< container for data stored in the buffer
 
@@ -395,7 +419,7 @@ private:
   QuicTxPacketList m_cryptoList[3];      //!< List of waiting CRYPTO frame packets with additional info per space (only 0 and 1 used)
   uint32_t m_maxBuffer;                  //!< Max number of data bytes in buffer (SND.WND)
   uint32_t m_cryptoSize;                 //!< Size of all CRYPTO frame data in the buffer
-  uint32_t m_sentSize;                   //!< Size of all data in the sent list
+  uint32_t m_sentSize;                   //!< Total wire size of all packets currently in the sent list.
   uint32_t m_numCryptoFramesInBuffer;    //!< Number of CRYPTO frames buffered
 
   Ptr<QuicSocketTxScheduler> m_scheduler { nullptr };         //!< Scheduler

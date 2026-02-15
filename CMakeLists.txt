@@ -52,4 +52,5 @@ build_lib(
     test/quic-tx-buffer-test.cc
     test/quic-header-test.cc
     test/quic-congestion-ops-test.cc
+    test/quic-flow-control-test.cc
 )

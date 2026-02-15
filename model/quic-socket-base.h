@@ -850,13 +850,14 @@ protected:
   Ptr<QuicL5Protocol> m_quicl5;  //!< The associated L5 Protocol
 
   // Rx and Tx buffer management
-  Ptr<QuicSocketRxBuffer> m_rxBuffer;                     //!< RX buffer
-  Ptr<QuicSocketTxBuffer> m_txBuffer;                     //!< TX buffer
-  uint32_t m_socketTxBufferSize;                          //!< Size of the socket TX buffer
-  uint32_t m_socketRxBufferSize;                          //!< Size of the socket RX buffer
-  QuicPacketNumberSpace m_pnSpaces[3];                    //!< Per-space packet number tracking
-  TypeId m_schedulingTypeId;                              //!< The socket type of the packet scheduler
-  Time m_defaultLatency;                                                                  //!< The default latency bound (only used by the EDF scheduler)
+  Ptr<QuicSocketRxBuffer> m_rxBuffer;       //!< RX buffer
+  Ptr<QuicSocketTxBuffer> m_txBuffer;       //!< TX buffer
+  uint32_t m_socketTxBufferSize;            //!< Size of the socket TX buffer
+  uint32_t m_socketRxBufferSize;            //!< Size of the socket RX buffer
+  QuicPacketNumberSpace m_pnSpaces[3];      //!< Per-space packet number tracking
+  TypeId m_schedulingTypeId;                //!< The socket type of the packet scheduler
+  Time m_defaultLatency;                    //!< The default latency bound (only used by the EDF scheduler)
+  uint64_t m_bytesRead;                     //!< Bytes consumed by the application (for flow control)
 
   // State-related attributes
   bool m_handshakeDoneSent;                 //!< True if the Handshake Done frame has been sent
@@ -878,7 +879,6 @@ protected:
   uint32_t m_initial_max_stream_id_bidi; //!< The the initial maximum number of application-owned bidirectional streams the peer may initiate
   TracedValue<Time> m_idleTimeout;       //!< The idle timeout value in seconds
   bool m_omit_connection_id;             //!< The flag that indicates if the connection id is required in the upcoming connection
-  uint8_t m_statelessResetToken[16];     //!< The stateless reset token
   uint8_t m_ack_delay_exponent;          //!< The exponent used to decode the ack delay field in the ACK frame
   Time m_max_ack_delay;                  //!< The maximum ack delay we promise to the peer
   uint32_t m_initial_max_stream_id_uni;  //!< The initial maximum number of application-owned unidirectional streams the peer may initiate
@@ -889,8 +889,6 @@ protected:
   bool m_couldContainTransportParameters;  //!< Check if in the actual conditions can receive Transport Parameters
 
   // Timers and Events
-  EventId m_sendPendingDataEvent;             //!< Micro-delay event to send pending data
-  EventId m_retxEvent;                        //!< Retransmission event
   EventId m_idleTimeoutEvent;                 //!< Event triggered upon receiving or sending a packet, when it expires the connection closes
   EventId m_drainingPeriodEvent;              //!< Event triggered upon idle timeout or immediate connection close, when it expires all closes
   TracedValue<Time> m_pto;                    //!< Probe timeout
@@ -901,10 +899,10 @@ protected:
   // Congestion Control
   Ptr<QuicSocketState> m_tcb;                     //!< Congestion control informations
   Ptr<TcpCongestionOps> m_congestionControl;      //!< Congestion control
-  TracedValue<Time> m_lastRtt;                                 //!< Latest measured RTT
+  TracedValue<Time> m_lastRtt;                    //!< Latest measured RTT
   bool m_quicCongestionControlLegacy;             //!< Quic Congestion control if true, TCP Congestion control if false
-  uint32_t m_lastMaxData;                                                 //!< Last MaxData ACK
-  uint32_t m_maxDataInterval;                                     //!< Interval between successive MaxData frames in ACKs
+  uint32_t m_lastMaxData;                         //!< Last MaxData ACK
+  uint32_t m_maxDataInterval;                     //!< Interval between successive MaxData frames in ACKs
 
   uint32_t m_initialPacketSize; //!< size of the first packet to be sent durin the handshake (at least 1200 bytes, per RFC)
 

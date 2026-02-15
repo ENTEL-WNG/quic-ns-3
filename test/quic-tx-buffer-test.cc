@@ -216,7 +216,7 @@ QuicTxBufferTestCase::TestRetransmission ()
   p1->AddHeader (sub);
   txBuf.Add (p1);
 
-  Ptr<Packet> ptx = txBuf.NextSequence (1200, SequenceNumber32 (1));
+  Ptr<Packet> ptx = txBuf.NextSequence (1200, SequenceNumber32 (1), APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(ptx->GetSize (), 1200, "TxBuf miscalculates size");
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 1200, "TxBuf miscalculates size of in flight segments");
 
@@ -230,7 +230,7 @@ QuicTxBufferTestCase::TestRetransmission ()
   std::vector<Ptr<QuicSocketTxItem>> acked = txBuf.OnAckUpdate (tcbd,
                                                             largestAcknowledged,
                                                             additionalAckBlocks,
-                                                            gaps);
+                                                            gaps, APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(acked.size (), 1, "Wrong acked packet vector size");
   NS_TEST_ASSERT_MSG_EQ(acked.at (0)->m_packet->GetSize (), 1200, "TxBuf miscalculates size");
   NS_TEST_ASSERT_MSG_EQ(acked.at (0)->m_packetNumber, SequenceNumber32 (1),
@@ -244,7 +244,7 @@ QuicTxBufferTestCase::TestRetransmission ()
   p2->AddHeader (sub);
   txBuf.Add (p2);
 
-  ptx = txBuf.NextSequence (1200, SequenceNumber32 (2));
+  ptx = txBuf.NextSequence (1200, SequenceNumber32 (2), APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(ptx->GetSize (), 1200, "TxBuf miscalculates size");
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 1200, "TxBuf miscalculates size of in flight segments");
 
@@ -254,21 +254,21 @@ QuicTxBufferTestCase::TestRetransmission ()
   p3->AddHeader (sub);
   txBuf.Add (p3);
 
-  ptx = txBuf.NextSequence (1200, SequenceNumber32 (3));
+  ptx = txBuf.NextSequence (1200, SequenceNumber32 (3), APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(ptx->GetSize (), 1200, "TxBuf miscalculates size");
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 2400, "TxBuf miscalculates size of in flight segments");
 
   acked = txBuf.OnAckUpdate (tcbd,
                              largestAcknowledged,
                              additionalAckBlocks,
-                             gaps);
+                             gaps, APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(acked.size (), 0, "Wrong acked packet vector size");
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 2400, "TxBuf miscalculates size of in flight segments");
 
   // retransmit the first of the two packets
   uint32_t newPackets = 1;
   txBuf.ResetSentList (newPackets);
-  std::vector<Ptr<QuicSocketTxItem>> lostPackets = txBuf.DetectLostPackets (tcbd);
+  std::vector<Ptr<QuicSocketTxItem>> lostPackets = txBuf.DetectLostPackets (tcbd, APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(lostPackets.size (), 1, "Wrong lost packet vector size");
   NS_TEST_ASSERT_MSG_EQ(lostPackets.at (0)->m_packet->GetSize (), 1200, "TxBuf miscalculates size");
   NS_TEST_ASSERT_MSG_EQ(lostPackets.at (0)->m_packetNumber, SequenceNumber32 (2),
@@ -276,11 +276,11 @@ QuicTxBufferTestCase::TestRetransmission ()
   // After detection, packet 2 is marked as lost, so it's NOT in flight
   NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (), 1200, "TxBuf miscalculates size of in flight segments");
 
-  uint32_t toRetx = txBuf.Retransmission (SequenceNumber32(2));
+  uint32_t toRetx = txBuf.Retransmission (SequenceNumber32(2), APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(toRetx, 1200, "wrong number of lost bytes");
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 1200, "TxBuf miscalculates size of in flight segments");
 
-  ptx = txBuf.NextSequence (toRetx, SequenceNumber32 (4));
+  ptx = txBuf.NextSequence (toRetx, SequenceNumber32 (4), APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(ptx->GetSize (), 1200, "TxBuf miscalculates size");
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 2400, "TxBuf miscalculates size of in flight segments");
 
@@ -289,7 +289,7 @@ QuicTxBufferTestCase::TestRetransmission ()
   acked = txBuf.OnAckUpdate (tcbd,
                              largestAcknowledged,
                              additionalAckBlocks,
-                             gaps);
+                             gaps, APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(acked.size (), 1, "Wrong acked packet vector size");
   NS_TEST_ASSERT_MSG_EQ(acked.at (0)->m_packet->GetSize (), 1200, "TxBuf miscalculates size");
   NS_TEST_ASSERT_MSG_EQ(acked.at (0)->m_packetNumber, SequenceNumber32 (3),
@@ -301,7 +301,7 @@ QuicTxBufferTestCase::TestRetransmission ()
   acked = txBuf.OnAckUpdate (tcbd,
                              largestAcknowledged,
                              additionalAckBlocks,
-                             gaps);
+                             gaps, APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(acked.size (), 1, "Wrong acked packet vector size");
   NS_TEST_ASSERT_MSG_EQ(acked.at (0)->m_packet->GetSize (), 1200, "TxBuf miscalculates size");
   NS_TEST_ASSERT_MSG_EQ(acked.at (0)->m_packetNumber, SequenceNumber32 (4),
@@ -505,7 +505,7 @@ QuicTxBufferTestCase::TestNewBlock ()
   NS_TEST_ASSERT_MSG_EQ(p1->GetSize (), 1200, "Wrong header size");
 
 
-  Ptr<Packet> ptx = txBuf.NextSequence (1200, SequenceNumber32 (1));
+  Ptr<Packet> ptx = txBuf.NextSequence (1200, SequenceNumber32 (1), APPLICATION_DATA);
 
   NS_TEST_ASSERT_MSG_EQ(ptx->GetSize (), 1200, "TxBuf miscalculates size");
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 1200,
@@ -519,7 +519,7 @@ QuicTxBufferTestCase::TestNewBlock ()
   std::vector<Ptr<QuicSocketTxItem>> acked = txBuf.OnAckUpdate (tcbd,
                                                                 largestAcknowledged,
                                                                 additionalAckBlocks,
-                                                                gaps);
+                                                                gaps, APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(acked.size (), 1, "Wrong acked packet vector size");
   NS_TEST_ASSERT_MSG_EQ(acked.at (0)->m_packet->GetSize (), 1200,
                         "TxBuf miscalculates size");
@@ -534,13 +534,13 @@ QuicTxBufferTestCase::TestNewBlock ()
   p2->AddHeader (sub);
   txBuf.Add (p2);
 
-  ptx = txBuf.NextSequence (1200, SequenceNumber32 (2));
+  ptx = txBuf.NextSequence (1200, SequenceNumber32 (2), APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(ptx->GetSize (), 1200,
                         "Returned packet has different size than requested");
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 1200,
                         "TxBuf miscalculates size of in flight segments");
 
-  ptx = txBuf.NextSequence (3000, SequenceNumber32 (3));
+  ptx = txBuf.NextSequence (3000, SequenceNumber32 (3), APPLICATION_DATA);
   // Expecting 3000 (added, including QuicSubheader 4) - 1200 (extracted, including QuicSubheader 4)
   // + 6 (QuicSubheader of the new packet, with both the length and the offset)
   NS_TEST_ASSERT_MSG_EQ(ptx->GetSize (), 1806,
@@ -559,7 +559,7 @@ QuicTxBufferTestCase::TestNewBlock ()
                                               true, false);
   p4->AddHeader (sub);
   txBuf.Add (p4);
-  ptx = txBuf.NextSequence (2400, SequenceNumber32 (4));
+  ptx = txBuf.NextSequence (2400, SequenceNumber32 (4), APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(ptx->GetSize (), 2400,
                         "Returned packet has different size than requested");
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 5406,
@@ -569,7 +569,7 @@ QuicTxBufferTestCase::TestNewBlock ()
   largestAcknowledged = 4;
   // Clear everything
   acked = txBuf.OnAckUpdate (tcbd, largestAcknowledged, additionalAckBlocks,
-                             gaps);
+                             gaps, APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 0,
                         "TxBuf miscalculates size of in flight segments");
 
@@ -608,12 +608,12 @@ QuicTxBufferTestCase::TestPartialAck ()
   txBuf.Add (p6);
 
   // send the packets with successive sequence numbers
-  Ptr<Packet> ptx1 = txBuf.NextSequence (1200, SequenceNumber32 (1));
-  Ptr<Packet> ptx2 = txBuf.NextSequence (1200, SequenceNumber32 (2));
-  Ptr<Packet> ptx3 = txBuf.NextSequence (1200, SequenceNumber32 (3));
-  Ptr<Packet> ptx4 = txBuf.NextSequence (1200, SequenceNumber32 (4));
-  Ptr<Packet> ptx5 = txBuf.NextSequence (1200, SequenceNumber32 (5));
-  Ptr<Packet> ptx6 = txBuf.NextSequence (1200, SequenceNumber32 (6));
+  Ptr<Packet> ptx1 = txBuf.NextSequence (1200, SequenceNumber32 (1), APPLICATION_DATA);
+  Ptr<Packet> ptx2 = txBuf.NextSequence (1200, SequenceNumber32 (2), APPLICATION_DATA);
+  Ptr<Packet> ptx3 = txBuf.NextSequence (1200, SequenceNumber32 (3), APPLICATION_DATA);
+  Ptr<Packet> ptx4 = txBuf.NextSequence (1200, SequenceNumber32 (4), APPLICATION_DATA);
+  Ptr<Packet> ptx5 = txBuf.NextSequence (1200, SequenceNumber32 (5), APPLICATION_DATA);
+  Ptr<Packet> ptx6 = txBuf.NextSequence (1200, SequenceNumber32 (6), APPLICATION_DATA);
 
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 7200,
                         "TxBuf miscalculates size of in flight segments");
@@ -628,9 +628,9 @@ QuicTxBufferTestCase::TestPartialAck ()
   std::vector<Ptr<QuicSocketTxItem>> acked = txBuf.OnAckUpdate (tcbd,
                                                             largestAcknowledged,
                                                             additionalAckBlocks,
-                                                            gaps);
+                                                            gaps, APPLICATION_DATA);
 
-  std::vector<Ptr<QuicSocketTxItem>> lost = txBuf.DetectLostPackets (tcbd);
+  std::vector<Ptr<QuicSocketTxItem>> lost = txBuf.DetectLostPackets (tcbd, APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(lost.empty (), true,
                         "TxBuf detects a non-existent loss");
   //NS_TEST_ASSERT_MSG_EQ(
@@ -691,12 +691,12 @@ QuicTxBufferTestCase::TestAckLoss ()
   txBuf.Add (p6);
 
   // send the packets with successive sequence numbers
-  Ptr<Packet> ptx1 = txBuf.NextSequence (1200, SequenceNumber32 (1));
-  Ptr<Packet> ptx2 = txBuf.NextSequence (1200, SequenceNumber32 (2));
-  Ptr<Packet> ptx3 = txBuf.NextSequence (1200, SequenceNumber32 (3));
-  Ptr<Packet> ptx4 = txBuf.NextSequence (1200, SequenceNumber32 (4));
-  Ptr<Packet> ptx5 = txBuf.NextSequence (1200, SequenceNumber32 (5));
-  Ptr<Packet> ptx6 = txBuf.NextSequence (1200, SequenceNumber32 (6));
+  Ptr<Packet> ptx1 = txBuf.NextSequence (1200, SequenceNumber32 (1), APPLICATION_DATA);
+  Ptr<Packet> ptx2 = txBuf.NextSequence (1200, SequenceNumber32 (2), APPLICATION_DATA);
+  Ptr<Packet> ptx3 = txBuf.NextSequence (1200, SequenceNumber32 (3), APPLICATION_DATA);
+  Ptr<Packet> ptx4 = txBuf.NextSequence (1200, SequenceNumber32 (4), APPLICATION_DATA);
+  Ptr<Packet> ptx5 = txBuf.NextSequence (1200, SequenceNumber32 (5), APPLICATION_DATA);
+  Ptr<Packet> ptx6 = txBuf.NextSequence (1200, SequenceNumber32 (6), APPLICATION_DATA);
 
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 7200,
                         "TxBuf miscalculates size of in flight segments");
@@ -711,9 +711,9 @@ QuicTxBufferTestCase::TestAckLoss ()
   std::vector<Ptr<QuicSocketTxItem>> acked = txBuf.OnAckUpdate (tcbd,
                                                             largestAcknowledged,
                                                             additionalAckBlocks,
-                                                            gaps);
+                                                            gaps, APPLICATION_DATA);
 
-  std::vector<Ptr<QuicSocketTxItem>> lost = txBuf.DetectLostPackets (tcbd);
+  std::vector<Ptr<QuicSocketTxItem>> lost = txBuf.DetectLostPackets (tcbd, APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(
       acked.size(), 5,
       "TxBuf does not correctly detect the number of ACKed packets");
@@ -779,21 +779,21 @@ QuicTxBufferTestCase::TestSetLoss ()
   txBuf.Add (p6);
 
   // send the packets with successive sequence numbers
-  Ptr<Packet> ptx1 = txBuf.NextSequence (1200, SequenceNumber32 (1));
-  Ptr<Packet> ptx2 = txBuf.NextSequence (1200, SequenceNumber32 (2));
-  Ptr<Packet> ptx3 = txBuf.NextSequence (1200, SequenceNumber32 (3));
-  Ptr<Packet> ptx4 = txBuf.NextSequence (1200, SequenceNumber32 (4));
-  Ptr<Packet> ptx5 = txBuf.NextSequence (1200, SequenceNumber32 (5));
-  Ptr<Packet> ptx6 = txBuf.NextSequence (1200, SequenceNumber32 (6));
+  Ptr<Packet> ptx1 = txBuf.NextSequence (1200, SequenceNumber32 (1), APPLICATION_DATA);
+  Ptr<Packet> ptx2 = txBuf.NextSequence (1200, SequenceNumber32 (2), APPLICATION_DATA);
+  Ptr<Packet> ptx3 = txBuf.NextSequence (1200, SequenceNumber32 (3), APPLICATION_DATA);
+  Ptr<Packet> ptx4 = txBuf.NextSequence (1200, SequenceNumber32 (4), APPLICATION_DATA);
+  Ptr<Packet> ptx5 = txBuf.NextSequence (1200, SequenceNumber32 (5), APPLICATION_DATA);
+  Ptr<Packet> ptx6 = txBuf.NextSequence (1200, SequenceNumber32 (6), APPLICATION_DATA);
 
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 7200,
                         "TxBuf miscalculates size of in flight segments");
-  bool found = txBuf.MarkAsLost (SequenceNumber32 (4));
+  bool found = txBuf.MarkAsLost (SequenceNumber32 (4), APPLICATION_DATA);
 
   NS_TEST_ASSERT_MSG_EQ(found, true, "TxBuf misses lost packet");
 
   // mark packet 4 as lost
-  std::vector<Ptr<QuicSocketTxItem>> lost = txBuf.DetectLostPackets (tcbd);
+  std::vector<Ptr<QuicSocketTxItem>> lost = txBuf.DetectLostPackets (tcbd, APPLICATION_DATA);
 
   NS_TEST_ASSERT_MSG_EQ(lost.size (), 1,
                         "TxBuf cannot set the correct number of lost packets");
@@ -803,7 +803,7 @@ QuicTxBufferTestCase::TestSetLoss ()
   // mark packets 1 and 2 as lost (all except the last 4)
   txBuf.ResetSentList (4);
 
-  lost = txBuf.DetectLostPackets (tcbd);
+  lost = txBuf.DetectLostPackets (tcbd, APPLICATION_DATA);
 
   NS_TEST_ASSERT_MSG_EQ(lost.size (), 3,
                         "TxBuf cannot set the correct number of lost packets");
@@ -858,12 +858,12 @@ QuicTxBufferTestCase::TestAddBlocks ()
   NS_TEST_ASSERT_MSG_EQ(extra, false, "TxBuf adds a packet in overflow");
 
   // send the packets with successive sequence numbers
-  Ptr<Packet> ptx1 = txBuf.NextSequence (1200, SequenceNumber32 (1));
-  Ptr<Packet> ptx2 = txBuf.NextSequence (1200, SequenceNumber32 (2));
-  Ptr<Packet> ptx3 = txBuf.NextSequence (1200, SequenceNumber32 (3));
-  Ptr<Packet> ptx4 = txBuf.NextSequence (1200, SequenceNumber32 (4));
-  Ptr<Packet> ptx5 = txBuf.NextSequence (1200, SequenceNumber32 (5));
-  Ptr<Packet> ptx6 = txBuf.NextSequence (1200, SequenceNumber32 (6));
+  Ptr<Packet> ptx1 = txBuf.NextSequence (1200, SequenceNumber32 (1), APPLICATION_DATA);
+  Ptr<Packet> ptx2 = txBuf.NextSequence (1200, SequenceNumber32 (2), APPLICATION_DATA);
+  Ptr<Packet> ptx3 = txBuf.NextSequence (1200, SequenceNumber32 (3), APPLICATION_DATA);
+  Ptr<Packet> ptx4 = txBuf.NextSequence (1200, SequenceNumber32 (4), APPLICATION_DATA);
+  Ptr<Packet> ptx5 = txBuf.NextSequence (1200, SequenceNumber32 (5), APPLICATION_DATA);
+  Ptr<Packet> ptx6 = txBuf.NextSequence (1200, SequenceNumber32 (6), APPLICATION_DATA);
 
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 6000,
                         "TxBuf miscalculates size of in flight segments");
@@ -898,15 +898,15 @@ QuicTxBufferTestCase::TestStream0 ()
   txBuf.Add (p3);
 
   // send the packets with successive sequence numbers
-  Ptr<Packet> ptx1 = txBuf.NextSequence (1200, SequenceNumber32 (1));
+  Ptr<Packet> ptx1 = txBuf.NextSequence (1200, SequenceNumber32 (1), APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 1200,
                         "TxBuf miscalculates size of in flight segments");
 
-  Ptr<Packet> ptx2 = txBuf.NextCryptoSequence (SequenceNumber32 (2));
+  Ptr<Packet> ptx2 = txBuf.NextCryptoSequence (SequenceNumber32 (2), APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 2400,
                         "TxBuf miscalculates size of in flight segments");
 
-  Ptr<Packet> ptx3 = txBuf.NextSequence (1200, SequenceNumber32 (3));
+  Ptr<Packet> ptx3 = txBuf.NextSequence (1200, SequenceNumber32 (3), APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 3600,
                         "TxBuf miscalculates size of in flight segments");
 
@@ -919,7 +919,7 @@ QuicTxBufferTestCase::TestStream0 ()
   std::vector<Ptr<QuicSocketTxItem>> acked = txBuf.OnAckUpdate (tcbd,
                                                             largestAcknowledged,
                                                             additionalAckBlocks,
-                                                            gaps);
+                                                            gaps, APPLICATION_DATA);
   // Packet 1 is acked, so packets 2 (CRYPTO) and 3 (stream 1) remain in flight
   NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (), 2400,
                         "TxBuf miscalculates size of in flight segments");
@@ -931,7 +931,7 @@ QuicTxBufferTestCase::TestStream0 ()
   acked = txBuf.OnAckUpdate (tcbd,
                                                             largestAcknowledged,
                                                             additionalAckBlocks,
-                                                            gaps);
+                                                            gaps, APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 1200,
                         "TxBuf miscalculates size of in flight segments");
 }

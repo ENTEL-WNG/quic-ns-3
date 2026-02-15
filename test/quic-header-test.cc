@@ -799,7 +799,10 @@ QuicSubHeaderTestCase::TestQuicSubHeaderSerializeDeserialize ()
                     "QuicSubHeader for STREAMS_BLOCKED_UNI frame is not as expected in deserialized subheader");
                   break;
               case QuicSubheader::NEW_CONNECTION_ID:
-                  head = QuicSubheader::CreateNewConnectionId (sequence, connectionId);
+                  {
+                    uint8_t token[16] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+                    head = QuicSubheader::CreateNewConnectionId (sequence, connectionId, token);
+                  }
 
                   headSize = 1 + QuicSubheader::GetVarInt64Size(sequence)/8 + 1 + 1 + 8 + 16;
 
