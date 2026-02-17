@@ -262,7 +262,7 @@ QuicSocketState::GetTypeId (void)
                    MakeTimeChecker ())
     .AddAttribute ("kMaxPacketsReceivedBeforeAckSend",
                    "The maximum number of packets without sending an ACK",
-                   UintegerValue (20),
+                   UintegerValue (2),
                    MakeUintegerAccessor (&QuicSocketState::m_kMaxPacketsReceivedBeforeAckSend),
                    MakeUintegerChecker<uint32_t> ())
     .AddAttribute ("kGranularity",
@@ -1078,7 +1078,7 @@ QuicSocketBase::MaybeQueueAck (PacketNumberSpace space)
 
   if (!pnSpace.m_queue_ack)
     {
-      if (pnSpace.m_numPacketsReceivedSinceLastAckSent > 2) // QUIC decimation option
+      if (pnSpace.m_numPacketsReceivedSinceLastAckSent >= m_tcb->m_kMaxPacketsReceivedBeforeAckSend)
         {
           NS_LOG_INFO ("immediately send ACK - more than 2 packets received");
           pnSpace.m_queue_ack = true;
@@ -1102,7 +1102,26 @@ QuicSocketBase::MaybeQueueAck (PacketNumberSpace space)
 bool
 QuicSocketBase::HasReceivedMissing ()
 {
-  // TODO implement this
+  if (!m_quicl5)
+    {
+      return false;
+    }
+
+  for (auto const& stream : m_quicl5->GetStreams ())
+    {
+      if (stream->GetRxBuffer()->Size () > 0 &&
+          stream->GetRxBuffer()->GetDeliverable (stream->GetRecvSize()).second == 0)
+        {
+          // There is data in the buffer, but none of it is contiguous with the
+          // currently expected receive offset (m_recvSize) for this stream.
+          // This indicates a missing segment in the stream.
+          NS_LOG_DEBUG ("Found missing data in stream " << stream->GetStreamId()
+                                     << ": expected offset " << stream->GetRecvSize()
+                                     << ", but next deliverable is 0, with "
+                                     << stream->GetRxBuffer()->Size() << " bytes buffered.");
+          return true;
+        }
+    }
   return false;
 }
 
@@ -1416,9 +1435,22 @@ void
 QuicSocketBase::DoRetransmit (std::vector<Ptr<QuicSocketTxItem> > lostPackets)
 {
   NS_LOG_FUNCTION (this);
+  
+  if (lostPackets.empty()) { return; }
+  
+  // Group lost packets by space
+  std::map<PacketNumberSpace, bool> spacesWithLoss;
   for (auto &item : lostPackets)
     {
-      m_txBuffer->Retransmission (item->m_packetNumber, item->m_space);
+      spacesWithLoss[item->m_space] = true;
+    }
+  
+  // Retransmit once per space
+  // The packet numbers will be assigned inside Retransmission()
+  for (auto &pair : spacesWithLoss)
+    {
+      PacketNumberSpace space = pair.first;
+      m_txBuffer->Retransmission (SequenceNumber32(0), space);
     }
   SendPendingData (m_connected);
 }
@@ -1572,6 +1604,7 @@ QuicSocketBase::RecvFrom (uint32_t maxSize, uint32_t flags,
 
   if (packet && packet->GetSize () != 0)
     {
+      m_bytesRead += packet->GetSize ();
       if (m_endPoint)
         {
           fromAddress = InetSocketAddress (m_endPoint->GetPeerAddress (), m_endPoint->GetPeerPort ());
@@ -2155,7 +2188,7 @@ QuicSocketBase::OnSendingAckFrame (PacketNumberSpace space)
   std::vector<SequenceNumber32> &receivedPn = m_pnSpaces[space].m_receivedPacketNumbers;
   NS_ABORT_MSG_IF (receivedPn.empty (), "No packet numbers received - cannot build ACK");
 
-  std::sort (receivedPn.begin (), receivedPn.end ());
+  std::sort(receivedPn.begin(), receivedPn.end(), std::greater<SequenceNumber32>());
 
   SequenceNumber32 largestReceived = m_pnSpaces[space].m_largestReceived;
 
@@ -2822,13 +2855,21 @@ QuicSocketBase::GetConnectionMaxData () const
 void
 QuicSocketBase::SetConnectionMaxData (uint32_t maxData)
 {
-  m_max_data = maxData;
-  // Flush buffered data now that the window has opened.
-  SendPendingData (m_connected);
-
-  if (GetTxAvailable () > 0)
+  // Only allow increases, never decreases (RFC 9000 compliance)
+  if (maxData > m_max_data)
     {
-      NotifySend (GetTxAvailable ());
+      m_max_data = maxData;
+      // Flush buffered data now that the window has opened.
+      SendPendingData (m_connected);
+
+      if (GetTxAvailable () > 0)
+        {
+          NotifySend (GetTxAvailable ());
+        }
+    }
+  else
+    {
+      NS_LOG_INFO ("Ignoring MAX_DATA " << maxData << " (not greater than current " << m_max_data << ")");
     }
 }
 

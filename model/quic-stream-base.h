@@ -195,6 +195,18 @@ public:
   uint64_t GetStreamId (void);
   uint32_t GetStreamTxAvailable (void) const;
 
+  /**
+   * \brief Get the stream RX buffer.
+   * \returns a smart pointer to the Rx buffer
+   */
+  Ptr<QuicStreamRxBuffer> GetRxBuffer () const;
+
+  /**
+   * \brief Get the amount of data received in this stream.
+   * \returns the amount of data received
+   */
+  uint64_t GetRecvSize () const;
+
 protected:
   QuicStreamTypes_t m_streamType;                    //!< The stream type
   QuicStreamDirectionTypes_t m_streamDirectionType;  //!< The stream direction

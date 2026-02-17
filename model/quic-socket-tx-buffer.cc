@@ -352,7 +352,7 @@ Ptr<Packet> QuicSocketTxBuffer::NextCryptoSequence (
       m_cryptoList[space].erase (it);
       m_cryptoSize -= currentPacket->GetSize ();
       m_sentList[space].insert (m_sentList[space].end (), outItem);
-      m_sentSize += outItem->m_packet->GetSize ();
+      m_sentSize += outItem->m_wireBytes;
       --m_numCryptoFramesInBuffer;
       Ptr<Packet> toRet = outItem->m_packet;
       return toRet;
@@ -373,7 +373,7 @@ Ptr<Packet> QuicSocketTxBuffer::NextSequence (uint32_t numBytes,
       NS_LOG_INFO ("Extracting " << outItem->m_packet->GetSize () << " bytes");
       outItem->m_packetNumber = seq;
       outItem->m_lastSent = Now ();
-      Ptr<Packet> toRet = outItem->m_packet;
+      Ptr<Packet> toRet = outItem->m_packet->Copy();
       return toRet;
     }
   else
@@ -616,76 +616,185 @@ bool QuicSocketTxBuffer::MarkAsLost (const SequenceNumber32 seq, PacketNumberSpa
 uint32_t QuicSocketTxBuffer::Retransmission (SequenceNumber32 packetNumber, PacketNumberSpace space)
 {
   NS_LOG_FUNCTION (this << space);
+  NS_ASSERT_MSG(m_socket, "m_socket must be set before calling Retransmission");
+  
   uint32_t toRetx = 0;
-  // First pass: add lost packets to the application buffer
-  for (auto sent_it = m_sentList[space].rbegin (); sent_it != m_sentList[space].rend ();
-       ++sent_it)
-    {
-      Ptr<QuicSocketTxItem> item = *sent_it;
-      if (item->m_lost)
-        {
-          // Add lost packet contents to app buffer
-          Ptr<QuicSocketTxItem> retx = CreateObject<QuicSocketTxItem> ();
-          retx->m_packetNumber = packetNumber++;
-          retx->m_space = space;
-          retx->m_isStream = item->m_isStream;
-          retx->m_isCrypto = item->m_isCrypto;
-          retx->m_packet = Create<Packet>();
-          NS_LOG_INFO (
-            "Retx packet " << item->m_packetNumber << " as " << retx->m_packetNumber.GetValue () << " in space " << space);
-          QuicSocketTxItem::MergeItems (*retx, *item);
-          retx->m_lost = false;
-          retx->m_retrans = true;
-          toRetx += retx->m_packet->GetSize ();
-          // Subtract the tracked wire bytes of the LOST item
-          if (m_sentSize >= item->m_wireBytes)
-            {
-              m_sentSize -= item->m_wireBytes;
-            }
-          else
-            {
-              m_sentSize = 0;
-              NS_LOG_WARN("m_sentSize underflow detected in Retransmission");
-            }
-            
-          if (retx->m_isCrypto)
-            {
-              NS_LOG_INFO ("Lost CRYPTO frame packet, re-inserting in list");
-              m_cryptoList[space].insert (m_cryptoList[space].begin (), retx);
-              m_cryptoSize += retx->m_packet->GetSize ();
-              m_numCryptoFramesInBuffer++;
-            }
-          else
-            {
-              m_scheduler->Add (retx, true);
-            }
-        }
-    }
 
-  NS_LOG_LOGIC ("Remove retransmitted packets from sent list in space " << space);
   auto sent_it = m_sentList[space].begin ();
-  // Remove lost packets from the sent list
-  while (!m_sentList[space].empty () && sent_it != m_sentList[space].end ())
+  while (sent_it != m_sentList[space].end ())
     {
       Ptr<QuicSocketTxItem> item = *sent_it;
       if (item->m_lost)
         {
-          uint32_t bytesToRemove = item->m_wireBytes > 0 ? item->m_wireBytes : item->m_packet->GetSize();
+          NS_LOG_INFO ("Processing lost packet " << item->m_packetNumber 
+                       << " isCrypto=" << item->m_isCrypto 
+                       << " isStream=" << item->m_isStream
+                       << " size=" << item->m_packet->GetSize());
           
-          if (m_sentSize >= bytesToRemove) {
+          if (item->m_isCrypto)
+            {
+              // CRYPTO packets are retransmitted whole with new packet numbers
+              Ptr<QuicSocketTxItem> retx = CreateObject<QuicSocketTxItem>();
+              retx->m_packetNumber = m_socket->m_pnSpaces[space].m_nextTxSequence++;
+              retx->m_space = space;
+              retx->m_isStream = false;
+              retx->m_isCrypto = true;
+              retx->m_packet = item->m_packet->Copy();
+              retx->m_lost = false;
+              retx->m_retrans = true;
+              
+              NS_LOG_INFO("Retransmitting CRYPTO packet " << item->m_packetNumber 
+                          << " as " << retx->m_packetNumber);
+              
+              // Add to CRYPTO list for immediate transmission
+              m_cryptoList[space].insert(m_cryptoList[space].begin(), retx);
+              m_cryptoSize += retx->m_packet->GetSize();
+              m_numCryptoFramesInBuffer++;
+              
+              toRetx += retx->m_packet->GetSize();
+            }
+          else  // Data packet - extract STREAM frames and store in retx list
+            {
+              Ptr<Packet> lostPacket = item->m_packet->Copy();
+              
+              while (lostPacket->GetSize() > 0)
+                {
+                  QuicSubheader sub;
+                  lostPacket->RemoveHeader(sub);
+                  
+                  if (sub.IsStream())
+                    {
+                      uint32_t dataLen = sub.GetLength();
+                      if (dataLen > 0 && lostPacket->GetSize() >= dataLen)
+                        {
+                          // Extract raw payload data
+                          Ptr<Packet> streamData = lostPacket->CreateFragment(0, dataLen);
+                          lostPacket->RemoveAtStart(dataLen);
+                          
+                          // Create NEW STREAM frame header
+                          QuicSubheader newSub = QuicSubheader::CreateStreamSubHeader(
+                              sub.GetStreamId(),
+                              sub.GetOffset(),
+                              dataLen,
+                              !(sub.GetOffset() == 0),
+                              true,
+                              sub.IsStreamFin()
+                          );
+                          
+                          streamData->AddHeader(newSub);
+                          
+                          // Create new TxItem
+                          Ptr<QuicSocketTxItem> retx = CreateObject<QuicSocketTxItem>();
+                          retx->m_packet = streamData;
+                          retx->m_isStream = true;
+                          retx->m_isCrypto = false;
+                          // Add it back to the scheduler
+                          m_scheduler->Add(retx, true);
+                          toRetx += streamData->GetSize();
+                          
+                          NS_LOG_INFO("Queuing STREAM retx: stream=" << sub.GetStreamId() 
+                                     << " offset=" << sub.GetOffset() 
+                                     << " len=" << dataLen 
+                                     << " from lost packet " << item->m_packetNumber);
+                        }
+                      else if (dataLen > 0)
+                        {
+                          NS_LOG_WARN("STREAM frame data length " << dataLen 
+                                      << " exceeds remaining packet size " 
+                                      << lostPacket->GetSize());
+                          break;
+                        }
+                      else
+                        {
+                          // Zero-length STREAM frame (possibly FIN-only)
+                          Ptr<Packet> streamData = Create<Packet>();
+                          
+                          QuicSubheader newSub = QuicSubheader::CreateStreamSubHeader(
+                              sub.GetStreamId(),
+                              sub.GetOffset(),
+                              0,
+                              !(sub.GetOffset() == 0),
+                              false,
+                              sub.IsStreamFin()
+                          );
+                          
+                          streamData->AddHeader(newSub);
+                          
+                          Ptr<QuicSocketTxItem> retx = CreateObject<QuicSocketTxItem>();
+                          retx->m_packet = streamData;
+                          retx->m_isStream = true;
+                          retx->m_isCrypto = false;
+                          
+                          m_scheduler->Add(retx, true);
+                          toRetx += streamData->GetSize();
+                          
+                          NS_LOG_INFO("Re-queuing zero-length STREAM frame " << sub.GetStreamId() 
+                                     << " offset " << sub.GetOffset());
+                        }
+                    }
+                  else if (sub.IsPadding())
+                    {
+                      break;
+                    }
+                  else
+                    {
+                      // Handle other frame types (MAX_DATA, MAX_STREAM_DATA, etc.)
+                      // These control frames should be retransmitted as-is
+                      uint32_t frameLen = sub.GetLength();
+                      
+                      Ptr<Packet> frameData = Create<Packet>();
+                      
+                      if (frameLen > 0 && lostPacket->GetSize() >= frameLen)
+                        {
+                          // Extract frame data using CreateFragment
+                          frameData = lostPacket->CreateFragment(0, frameLen);
+                          lostPacket->RemoveAtStart(frameLen);
+                        }
+                      
+                      // Re-add the header
+                      frameData->AddHeader(sub);
+                      
+                      Ptr<QuicSocketTxItem> retx = CreateObject<QuicSocketTxItem>();
+                      retx->m_packet = frameData;
+                      retx->m_isStream = false;
+                      retx->m_isCrypto = false;
+                      
+                      m_scheduler->Add(retx, true);
+                      toRetx += frameData->GetSize();
+                      
+                      NS_LOG_INFO("Re-queuing control frame type " << (int)sub.GetFrameType());
+                    }
+                }
+              
+              NS_LOG_INFO("Finished processing STREAM data from lost packet " << item->m_packetNumber);
+            }
+          
+          // Update m_sentSize (guarded subtraction)
+          uint32_t bytesToRemove = item->m_wireBytes > 0 ? item->m_wireBytes : item->m_packet->GetSize();
+          if (m_sentSize >= bytesToRemove)
+            {
               m_sentSize -= bytesToRemove;
-          } else {
+            }
+          else
+            {
+              NS_LOG_WARN ("m_sentSize underflow detected in Retransmission. Resetting to 0.");
               m_sentSize = 0;
-              NS_LOG_WARN("m_sentSize underflow detected in Retransmission");
-          }
-          // Remove lost packet from sent vector
+            }
+          
+          // Remove lost item from sent list
           sent_it = m_sentList[space].erase (sent_it);
         }
       else
         {
+          // Packet is not lost, just move to the next item
           sent_it++;
         }
     }
+  NS_LOG_INFO ("Retransmission() complete. m_sentSize=" << m_sentSize 
+               << " AppSize=" << AppSize() 
+               << " m_cryptoSize=" << m_cryptoSize 
+               << " toRetx=" << toRetx);
+  
   return toRetx;
 }
 
@@ -701,6 +810,8 @@ std::vector<Ptr<QuicSocketTxItem> > QuicSocketTxBuffer::DetectLostPackets (Ptr<T
   Time loss_delay = std::max (tcbd->m_kTimeThreshold * std::max (tcbd->m_latestRtt, tcbd->m_smoothedRtt), tcbd->m_kGranularity);
   Time lost_send_time = Now () - loss_delay;
 
+  NS_LOG_INFO ("Entering loss detection process with --> Time threshold: " << lost_send_time.GetSeconds()
+              << "and LargestAcked: " << m_socket->m_pnSpaces[space].m_largestAcked);
   auto sent_it = m_sentList[space].begin ();
   while (sent_it != m_sentList[space].end ())
     {
@@ -712,21 +823,38 @@ std::vector<Ptr<QuicSocketTxItem> > QuicSocketTxBuffer::DetectLostPackets (Ptr<T
           continue; 
       }
 
-      // Check RFC 9002 Loss Thresholds or manual loss
-      if (unacked->m_lost || 
-          (unacked->m_packetNumber <= m_socket->m_pnSpaces[space].m_largestAcked &&
-           (unacked->m_lastSent <= lost_send_time ||
-            m_socket->m_pnSpaces[space].m_largestAcked.GetValue () >= unacked->m_packetNumber.GetValue () + tcbd->m_kPacketThreshold)))
-        {
-          unacked->m_lost = true;
-          newly_lost.push_back (unacked);
-          // Do not remove from flight list (Retransmission needs them there).
-          // BytesInFlight ignores lost packets automatically.
-          
-          NS_LOG_INFO ("Packet " << unacked->m_packetNumber << " in space " << space << " detected lost.");
-          sent_it++;
-          continue;
-        }
+      // Check if already marked as lost
+      if (unacked->m_lost) {
+        newly_lost.push_back (unacked);
+        NS_LOG_INFO ("Packet " << unacked->m_packetNumber << " in space " << space << " already marked lost.");
+        sent_it++;
+        continue;
+      }
+
+      bool is_lost = false;
+
+      // RFC 9002 Section 6.1.1: Time-based loss detection
+      // A packet is declared lost if it was sent long enough ago
+      if (unacked->m_lastSent <= lost_send_time) {
+        is_lost = true;
+        NS_LOG_INFO ("Packet " << unacked->m_packetNumber << " in space " << space << " detected lost (time-based). Sent at " << unacked->m_lastSent.GetSeconds());
+      }
+
+      // RFC 9002 Section 6.1.2: Packet-based loss detection
+      // A packet is declared lost if a packet that was sent after it has been acknowledged
+      // and the packet number gap is >= kPacketThreshold
+      if (unacked->m_packetNumber < m_socket->m_pnSpaces[space].m_largestAcked &&
+          m_socket->m_pnSpaces[space].m_largestAcked.GetValue () >= unacked->m_packetNumber.GetValue () + tcbd->m_kPacketThreshold) {
+        is_lost = true;
+        NS_LOG_INFO ("Packet " << unacked->m_packetNumber << " in space " << space << " detected lost (packet-based).");
+      }
+
+      if (is_lost) {
+        unacked->m_lost = true;
+        newly_lost.push_back (unacked);
+        sent_it++;
+        continue;
+      }
       else
         {
           // Update the loss timer for future checks
@@ -957,7 +1085,45 @@ void QuicSocketTxBuffer::UpdatePacketSent (SequenceNumber32 seq, uint32_t sz, Pa
 void QuicSocketTxBuffer::DiscardSpace (PacketNumberSpace space)
 {
   NS_LOG_FUNCTION (this << space);
+
+  // 1. Correctly update m_sentSize before clearing sent list
+  for (auto const& item : m_sentList[space])
+    {
+      // Use wireBytes if available, otherwise packet size
+      uint32_t size = item->m_wireBytes > 0 ? item->m_wireBytes : item->m_packet->GetSize();
+      
+      if (m_sentSize >= size)
+        {
+          m_sentSize -= size;
+        }
+      else
+        {
+          m_sentSize = 0;
+          NS_LOG_WARN ("m_sentSize underflow detected in DiscardSpace");
+        }
+    }
   m_sentList[space].clear ();
+
+  // 2. Correctly update m_cryptoSize before clearing crypto list
+  for (auto const& item : m_cryptoList[space])
+    {
+      uint32_t size = item->m_packet->GetSize();
+      
+      if (m_cryptoSize >= size)
+        {
+          m_cryptoSize -= size;
+        }
+      else
+        {
+          m_cryptoSize = 0;
+           NS_LOG_WARN ("m_cryptoSize underflow detected in DiscardSpace");
+        }
+
+      if (m_numCryptoFramesInBuffer > 0)
+        {
+          m_numCryptoFramesInBuffer--;
+        }
+    }
   m_cryptoList[space].clear ();
 }
 

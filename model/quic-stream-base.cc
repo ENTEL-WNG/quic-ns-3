@@ -412,7 +412,7 @@ QuicStreamBase::Recv (Ptr<Packet> frame, const QuicSubheader& sub, Address &addr
               if (m_maxAdvertisedData == 0 || m_recvSize + m_rxBuffer->Available () > m_maxAdvertisedData + m_maxDataInterval)
                 {
                   m_maxAdvertisedData = m_recvSize + m_rxBuffer->Available ();
-                  QuicSubheader sub = QuicSubheader::CreateMaxData (m_recvSize + m_rxBuffer->Available ());
+                  QuicSubheader sub = QuicSubheader::CreateMaxStreamData (m_streamId, m_recvSize + m_rxBuffer->Available ());
                   // build empty packet
                   Ptr<Packet> maxStream = Create<Packet> (0);
                   maxStream->AddHeader (sub);
@@ -655,6 +655,18 @@ uint32_t
 QuicStreamBase::GetStreamRcvBufSize (void) const
 {
   return m_rxBuffer->GetMaxBufferSize ();
+}
+
+Ptr<QuicStreamRxBuffer>
+QuicStreamBase::GetRxBuffer () const
+{
+  return m_rxBuffer;
+}
+
+uint64_t
+QuicStreamBase::GetRecvSize () const
+{
+  return m_recvSize;
 }
 
 } // namespace ns3

@@ -246,19 +246,21 @@ QuicCongestionOps::OnPacketAckedCC (Ptr<TcpSocketState> tcb,
         // else --> Pacing limited, should grow
     }
 
+  uint32_t ackedBytes = ackedPacket->m_wireBytes > 0 
+                      ? ackedPacket->m_wireBytes 
+                      : ackedPacket->m_packet->GetSize();
   if (tcbd->m_cWnd < tcbd->m_ssThresh)
     {
       NS_LOG_LOGIC ("In slow start");
       // Slow start.
-      tcbd->m_cWnd += ackedPacket->m_packet->GetSize ();
+      tcbd->m_cWnd += ackedBytes;
     }
   else
     {
       NS_LOG_LOGIC ("In congestion avoidance");
       // Congestion Avoidance.
       if (tcbd->m_cWnd > (uint32_t) 0) {
-          tcbd->m_cWnd += tcbd->m_segmentSize * ackedPacket->m_packet->GetSize ()
-              / tcbd->m_cWnd;
+          tcbd->m_cWnd += tcbd->m_segmentSize * ackedBytes / tcbd->m_cWnd;
       } else {
           tcbd->m_cWnd = tcbd->m_kMinimumWindow;
       }
@@ -295,17 +297,17 @@ QuicCongestionOps::OnPacketsLost (
       
       // Track first lost packet time for persistent congestion
       tcbd->m_firstLostTime = lostPackets.at (0)->m_lastSent;
-    }
     
-  // Check for Persistent Congestion (RFC 9002 Section 7.6)
-  Time congestionPeriod = largestLostPacket->m_lastSent - tcbd->m_firstLostTime;
-  Time persistentThreshold = tcbd->m_kPersistentCongestionThreshold * (tcbd->m_smoothedRtt + std::max (4 * tcbd->m_rttVar, MilliSeconds (1)) + tcbd->m_peerMaxAckDelay);
-  
-  if (congestionPeriod > persistentThreshold)
-    {
-      NS_LOG_INFO ("Persistent Congestion detected. Resetting window.");
-      tcbd->m_cWnd = tcbd->m_kMinimumWindow;
-      tcbd->m_ssThresh = tcbd->m_cWnd; 
+      // Check for Persistent Congestion (RFC 9002 Section 7.6)
+      Time congestionPeriod = largestLostPacket->m_lastSent - tcbd->m_firstLostTime;
+      Time persistentThreshold = tcbd->m_kPersistentCongestionThreshold * (tcbd->m_smoothedRtt + std::max (4 * tcbd->m_rttVar, tcbd->m_kGranularity) + tcbd->m_peerMaxAckDelay);
+      
+      if (congestionPeriod > persistentThreshold)
+        {
+          NS_LOG_INFO ("Persistent Congestion detected. Resetting window.");
+          tcbd->m_cWnd = tcbd->m_kMinimumWindow;
+          tcbd->m_ssThresh = tcbd->m_cWnd; 
+        }
     }
 }
 

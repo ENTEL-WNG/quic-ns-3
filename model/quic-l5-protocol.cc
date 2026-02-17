@@ -502,5 +502,11 @@ QuicL5Protocol::GetMaxData ()
   return m_socket->GetConnectionMaxData ();
 }
 
+const std::vector<Ptr<QuicStreamBase> >&
+QuicL5Protocol::GetStreams() const
+{
+  return m_streams;
+}
+
 } // namespace ns3
 
