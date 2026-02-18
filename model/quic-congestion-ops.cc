@@ -288,11 +288,10 @@ QuicCongestionOps::OnPacketsLost (
     {
       tcbd->m_endOfRecovery = tcbd->m_highTxMark;
       tcbd->m_congestionRecoveryStartTime = Now ();
-      tcbd->m_cWnd *= tcbd->m_kLossReductionFactor;
-      if (tcbd->m_cWnd < tcbd->m_kMinimumWindow)
-        {
-          tcbd->m_cWnd = tcbd->m_kMinimumWindow;
-        }
+
+      uint32_t reducedCWnd = static_cast<uint32_t>(
+        static_cast<double>(tcbd->m_cWnd.Get()) * tcbd->m_kLossReductionFactor);
+      tcbd->m_cWnd = std::max(reducedCWnd, (uint32_t)tcbd->m_kMinimumWindow);
       tcbd->m_ssThresh = tcbd->m_cWnd;
       
       // Track first lost packet time for persistent congestion
