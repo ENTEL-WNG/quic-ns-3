@@ -244,7 +244,8 @@ QuicSocketState::GetTypeId (void)
     .AddAttribute ("kInitialRtt",
                    "The default RTT used before an RTT sample is taken",
                    TimeValue (MilliSeconds (333)),
-                   MakeTimeAccessor (&QuicSocketState::m_kInitialRtt),
+                   MakeTimeAccessor (&QuicSocketState::SetInitialRtt,
+                                     &QuicSocketState::GetInitialRtt),
                    MakeTimeChecker ())
     .AddAttribute ("kPacketThreshold",
                    "Maximum reordering in packet number space before loss detection considers a packet lost",
@@ -378,6 +379,10 @@ QuicSocketState::SetInitialWindowMultiplier (uint32_t multiplier)
 {
   m_kInitialWindowMultiplier = multiplier;
   m_initialCWnd = std::min (m_kInitialWindowMultiplier * m_segmentSize, std::max (m_kMinimumWindowMultiplier * m_segmentSize, 14720U));
+  if (m_delivered == 0)
+    {
+      m_cWnd = m_initialCWnd;
+    }
 }
 
 void
@@ -397,6 +402,20 @@ uint32_t
 QuicSocketState::GetMinimumWindowMultiplier (void) const
 {
   return m_kMinimumWindowMultiplier;
+}
+
+void
+QuicSocketState::SetInitialRtt (Time initialRtt)
+{
+  m_kInitialRtt = initialRtt;
+  m_smoothedRtt = initialRtt;
+  m_rttVar = initialRtt / 2;
+}
+
+Time
+QuicSocketState::GetInitialRtt (void) const
+{
+  return m_kInitialRtt;
 }
 
 QuicSocketBase::QuicSocketBase (void)
@@ -1031,6 +1050,10 @@ QuicSocketBase::SetSegSize (uint32_t size)
   // Update minimum congestion window
   m_tcb->m_initialCWnd = std::min (m_tcb->m_kInitialWindowMultiplier * size, std::max (m_tcb->m_kMinimumWindowMultiplier * size, 14720U));
   m_tcb->m_kMinimumWindow = m_tcb->m_kMinimumWindowMultiplier * size;
+  if (m_socketState == IDLE)
+    {
+      m_tcb->m_cWnd = m_tcb->m_initialCWnd;
+    }
 }
 
 uint32_t
@@ -3193,6 +3216,10 @@ QuicSocketBase::SetInitialSSThresh (uint32_t threshold)
                         "QuicSocketBase::SetSSThresh() cannot change initial ssThresh after connection started.");
 
   m_tcb->m_initialSsThresh = threshold;
+  if (m_socketState == IDLE)
+    {
+      m_tcb->m_ssThresh = threshold;
+    }
 }
 
 uint32_t

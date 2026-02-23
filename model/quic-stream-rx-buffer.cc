@@ -224,7 +224,25 @@ QuicStreamRxBuffer::GetDeliverable (uint64_t currRecvOffset)
   uint64_t lengthToExtract = 0;
   NS_LOG_LOGIC ("Calculating deliverable size");
 
-  QuicStreamRxPacketList::iterator i;
+  // First, purge any stale items that are entirely below currRecvOffset
+  // (already-delivered retransmissions that were buffered out-of-order).
+  QuicStreamRxPacketList::iterator i = m_streamRecvList.begin ();
+  while (i != m_streamRecvList.end ())
+    {
+      uint64_t itemEnd = (*i)->m_offset + (*i)->m_packet->GetSize ();
+      if (itemEnd <= currRecvOffset)
+        {
+          // Entirely stale - remove it
+          NS_LOG_LOGIC ("Purging stale buffered packet at offset " << (*i)->m_offset
+                        << " (already consumed up to " << currRecvOffset << ")");
+          m_numBytesInBuffer -= (*i)->m_packet->GetSize ();
+          i = m_streamRecvList.erase (i);
+        }
+      else
+        {
+          ++i;
+        }
+    }
 
   for (i = m_streamRecvList.begin (); i != m_streamRecvList.end (); ++i)
     {

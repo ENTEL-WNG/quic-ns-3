@@ -161,6 +161,18 @@ public:
    */
   uint32_t GetMinimumWindowMultiplier (void) const;
 
+  /**
+   * \brief Set the initial RTT
+   * \param initialRtt the initial RTT
+   */
+  void SetInitialRtt (Time initialRtt);
+
+  /**
+   * \brief Get the initial RTT
+   * \return the initial RTT
+   */
+  Time GetInitialRtt (void) const;
+
   // Congestion Control variables of interests (RFC 9002 Appendix B.1)
   SequenceNumber32 m_endOfRecovery;  /**< The largest packet number sent when QUIC detects a loss. When a larger packet
                                       *   is acknowledged, QUIC exits recovery. */
