@@ -660,8 +660,9 @@ QuicSocketBase::Bind (void)
       m_errno = ERROR_ADDRNOTAVAIL;
       return -1;
     }
-
-  m_quicl4->UdpBind (this);
+  // Bind ussing allocated address and port
+  InetSocketAddress allocatedAddr (m_endPoint->GetLocalAddress (), m_endPoint->GetLocalPort ());
+  m_quicl4->UdpBind (allocatedAddr, this);
   return SetupCallback ();
 }
 
@@ -729,8 +730,22 @@ QuicSocketBase::Bind (const Address &address)
       m_errno = ERROR_INVAL;
       return -1;
     }
-
-  m_quicl4->UdpBind (address, this);
+  // Bind ussing allocated address and port
+  if (m_endPoint6)
+    {
+      Inet6SocketAddress allocatedAddr (m_endPoint6->GetLocalAddress (), m_endPoint6->GetLocalPort ());
+      m_quicl4->UdpBind (allocatedAddr, this);
+    }
+  else if (m_endPoint)
+    {
+      InetSocketAddress allocatedAddr (m_endPoint->GetLocalAddress (), m_endPoint->GetLocalPort ());
+      m_quicl4->UdpBind (allocatedAddr, this);
+    }
+  else
+    {
+      // Fallback
+      m_quicl4->UdpBind (address, this);
+    }
   return SetupCallback ();
 }
 
@@ -744,8 +759,9 @@ QuicSocketBase::Bind6 (void)
       m_errno = ERROR_ADDRNOTAVAIL;
       return -1;
     }
-
-  m_quicl4->UdpBind6 (this);
+  // Bind ussing allocated address and port
+  Inet6SocketAddress allocatedAddr (m_endPoint6->GetLocalAddress (), m_endPoint6->GetLocalPort ());
+  m_quicl4->UdpBind (allocatedAddr, this);
   return SetupCallback ();
 }
 
@@ -857,28 +873,31 @@ QuicSocketBase::Connect (const Address & address)
       m_quicl5 = CreateStreamController ();
     }
 
-  // check if the address is in a list of known and authenticated addresses
-  auto result = std::find (
-    m_quicl4->GetAuthAddresses ().begin (), m_quicl4->GetAuthAddresses ().end (),
-    InetSocketAddress::ConvertFrom (address).GetIpv4 ());
+  if (InetSocketAddress::IsMatchingType (address))
+    {
+      // check if the address is in a list of known and authenticated addresses
+      auto result = std::find (
+        m_quicl4->GetAuthAddresses ().begin (), m_quicl4->GetAuthAddresses ().end (),
+        InetSocketAddress::ConvertFrom (address).GetIpv4 ());
 
-  if (result != m_quicl4->GetAuthAddresses ().end ()
-      || m_quicl4->Is0RTTHandshakeAllowed ())
-    {
-      NS_LOG_INFO (
-        "CONNECTION AUTHENTICATED Client found the Server " << InetSocketAddress::ConvertFrom (address).GetIpv4 () << " port " << InetSocketAddress::ConvertFrom (address).GetPort () << " in authenticated list");
-      // connect the underlying UDP socket
-      m_quicl4->UdpConnect (address, this);
-      return DoFastConnect ();
+      if (result != m_quicl4->GetAuthAddresses ().end ()
+          || m_quicl4->Is0RTTHandshakeAllowed ())
+        {
+          NS_LOG_INFO (
+            "CONNECTION AUTHENTICATED Client found the Server " << InetSocketAddress::ConvertFrom (address).GetIpv4 () << " port " << InetSocketAddress::ConvertFrom (address).GetPort () << " in authenticated list");
+          // connect the underlying UDP socket
+          m_quicl4->UdpConnect (address, this);
+          return DoFastConnect ();
+        }
     }
-  else
-    {
-      NS_LOG_INFO (
-        "CONNECTION not authenticated: cannot perform 0-RTT Handshake");
-      // connect the underlying UDP socket
-      m_quicl4->UdpConnect (address, this);
-      return DoConnect ();
-    }
+  
+  // For IPv6 or unauthenticated IPv4, proceed with normal handshake
+  NS_LOG_INFO (
+    "CONNECTION not authenticated: cannot perform 0-RTT Handshake");
+  // connect the underlying UDP socket
+  m_quicl4->UdpConnect (address, this);
+  return DoConnect ();
+
 
 }
 
@@ -2437,7 +2456,7 @@ QuicSocketBase::OnReceivedAckFrame (QuicSubheader &sub, PacketNumberSpace space)
   // notify the application that more data can be sent
   if (GetTxAvailable () > 0)
     {
-      NotifySend (GetTxAvailable ());
+  NotifySend (GetTxAvailable ());
     }
 
   // try to send more data

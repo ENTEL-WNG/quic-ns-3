@@ -67,7 +67,9 @@ QuicUdpBinding::QuicUdpBinding ()
   : m_budpSocket (0),
   m_budpSocket6 (0),
   m_quicSocket (nullptr),
-  m_listenerBinding (false)
+  m_listenerBinding (false),
+  m_socketType (QUIC_UNDETERMINED),
+  m_hasPeerAddress(false)
 {
   NS_LOG_FUNCTION (this);
 }
@@ -138,9 +140,9 @@ QuicL4Protocol::GetTypeId (void)
                    MakeObjectVectorAccessor (&QuicL4Protocol::m_quicUdpBindingList),
                    MakeObjectVectorChecker<QuicUdpBinding> ())
     .AddTraceSource ("NewSocket",
-                     "Trace source fired when a new QUIC socket is created",
-                     MakeTraceSourceAccessor (&QuicL4Protocol::m_newSocketTrace),
-                     "ns3::Socket::TracedCallback")
+                   "Trace source fired when a new QUIC socket is created",
+                   MakeTraceSourceAccessor (&QuicL4Protocol::m_newSocketTrace),
+                   "ns3::Socket::TracedCallback")
     /*.AddAttribute ("AuthAddresses", "The list of Authenticated addresses associated to this protocol.",
                                            ObjectVectorValue (),
                                            MakeObjectVectorAccessor (&QuicL4Protocol::m_authAddresses),
@@ -192,6 +194,7 @@ QuicL4Protocol::UdpBind (Ptr<QuicSocketBase> socket)
           Ptr<Socket> udpSocket = CreateUdpSocket ();
           res = udpSocket->Bind ();
           item->m_budpSocket = udpSocket;
+          item->m_socketType = QUIC_IPV4_UDP;
           break;
         }
     }
@@ -214,6 +217,7 @@ QuicL4Protocol::UdpBind6 (Ptr<QuicSocketBase> socket)
           Ptr<Socket> udpSocket6 = CreateUdpSocket6 ();
           res = udpSocket6->Bind ();
           item->m_budpSocket6 = udpSocket6;
+          item->m_socketType = QUIC_IPV6_UDP;
           break;
         }
     }
@@ -229,37 +233,31 @@ QuicL4Protocol::UdpBind (const Address &address, Ptr<QuicSocketBase> socket)
   int res = -1;
   if (InetSocketAddress::IsMatchingType (address))
     {
-      QuicUdpBindingList::iterator it;
-      for (it = m_quicUdpBindingList.begin (); it != m_quicUdpBindingList.end (); ++it)
+      for (auto it = m_quicUdpBindingList.begin (); it != m_quicUdpBindingList.end (); ++it)
         {
           Ptr<QuicUdpBinding> item = *it;
           if (item->m_quicSocket == socket and !item->m_budpSocket)
             {
-              Ptr<Socket> udpSocket = CreateUdpSocket ();
-              res = udpSocket->Bind (address);
-              item->m_budpSocket = udpSocket;
-              break;
+              item->m_budpSocket = CreateUdpSocket ();
+              item->m_socketType = QUIC_IPV4_UDP;
+              res = item->m_budpSocket->Bind (address);
+              return res;
             }
         }
-
-      return res;
     }
   else if (Inet6SocketAddress::IsMatchingType (address))
     {
-      QuicUdpBindingList::iterator it;
-      for (it = m_quicUdpBindingList.begin (); it != m_quicUdpBindingList.end (); ++it)
+      for (auto it = m_quicUdpBindingList.begin (); it != m_quicUdpBindingList.end (); ++it)
         {
           Ptr<QuicUdpBinding> item = *it;
           if (item->m_quicSocket == socket and !item->m_budpSocket6)
             {
-              Ptr<Socket> udpSocket6 = CreateUdpSocket ();
-              res = udpSocket6->Bind (address);
-              item->m_budpSocket6 = udpSocket6;
-              break;
+              item->m_budpSocket6 = CreateUdpSocket6 ();
+              item->m_socketType = QUIC_IPV6_UDP;
+              res = item->m_budpSocket6->Bind (address);
+              return res;
             }
         }
-
-      return res;
     }
   return -1;
 }
@@ -270,36 +268,43 @@ QuicL4Protocol::UdpConnect (const Address & address, Ptr<QuicSocketBase> socket)
   NS_LOG_FUNCTION (this << address << socket);
   if (InetSocketAddress::IsMatchingType (address) == true)
     {
-      UdpBind (address, socket);
-
-      QuicUdpBindingList::iterator it;
-      for (it = m_quicUdpBindingList.begin (); it != m_quicUdpBindingList.end (); ++it)
+      for (auto it = m_quicUdpBindingList.begin (); it != m_quicUdpBindingList.end (); ++it)
         {
           Ptr<QuicUdpBinding> item = *it;
           if (item->m_quicSocket == socket)
             {
+              // If it's a server answering a client, only save the destiny,
+              // no need to connect the socket again.
+              if (m_isServer && !item->m_listenerBinding)
+                {
+                  item->m_peerAddress = address;
+                  item->m_hasPeerAddress = true;
+                  return 0;
+                }
               return item->m_budpSocket->Connect (address);
             }
         }
-
       NS_LOG_INFO ("UDP Socket: Connecting");
-
     }
   else if (Inet6SocketAddress::IsMatchingType (address) == true)
     {
-      UdpBind (address, socket);
-
-      QuicUdpBindingList::iterator it;
-      for (it = m_quicUdpBindingList.begin (); it != m_quicUdpBindingList.end (); ++it)
+      for (auto it = m_quicUdpBindingList.begin (); it != m_quicUdpBindingList.end (); ++it)
         {
           Ptr<QuicUdpBinding> item = *it;
           if (item->m_quicSocket == socket)
             {
+              // If it's a server answering a client, only save the destiny,
+              // no need to connect the socket again.
+              if (m_isServer && !item->m_listenerBinding)
+                {
+                  item->m_peerAddress = address;
+                  item->m_hasPeerAddress = true;
+                  return 0;
+                }
               return item->m_budpSocket6->Connect (address);
             }
         }
       NS_LOG_INFO ("UDP Socket: Connecting");
-
     }
   NS_LOG_WARN ("UDP Connection Failed");
   return -1;
@@ -514,8 +519,14 @@ QuicL4Protocol::ForwardUp (Ptr<Socket> sock)
       // RFC 9000 Section 7.2: 0-RTT handling for servers
       else if (header.IsORTT () && m_isServer && !socket)
         {
-          auto result = std::find (m_authAddresses.begin (), m_authAddresses.end (), 
-                                  InetSocketAddress::ConvertFrom (from).GetIpv4 ());
+          Address senderIp;
+          if (Inet6SocketAddress::IsMatchingType(from)) {
+              senderIp = Inet6SocketAddress::ConvertFrom(from).GetIpv6();
+          } else {
+              senderIp = InetSocketAddress::ConvertFrom(from).GetIpv4();
+          }
+
+          auto result = std::find (m_authAddresses.begin (), m_authAddresses.end (), senderIp);
           
           if (result == m_authAddresses.end () && !m_0RTTHandshakeStart)
             {
@@ -534,17 +545,17 @@ QuicL4Protocol::ForwardUp (Ptr<Socket> sock)
         {
           if (header.IsHandshake ())
             {
-               Ipv4Address senderIp = InetSocketAddress::ConvertFrom (from).GetIpv4 ();
-               if (std::find(m_authAddresses.begin(), m_authAddresses.end(), senderIp) == m_authAddresses.end())
-                 {
-                   m_authAddresses.push_back (senderIp);
-                 }
-            }
-          
-          // RFC 9000 Section 12: Dispatch to the socket's internal frame processor
-          if (!m_socketHandlers[socket].IsNull())
-            {
-              m_socketHandlers[socket] (packet, header, from);
+              Address senderIp;
+              if (Inet6SocketAddress::IsMatchingType(from)) {
+                  senderIp = Inet6SocketAddress::ConvertFrom(from).GetIpv6();
+              } else {
+                  senderIp = InetSocketAddress::ConvertFrom(from).GetIpv4();
+              }
+
+              if (std::find(m_authAddresses.begin(), m_authAddresses.end(), senderIp) == m_authAddresses.end())
+                {
+                  m_authAddresses.push_back (senderIp);
+                }
             }
         }
       else
@@ -626,8 +637,19 @@ QuicL4Protocol::CloneSocket (Ptr<QuicSocketBase> oldsock)
   Ptr<QuicSocketBase> newsock = CopyObject<QuicSocketBase> (oldsock);
   NS_LOG_LOGIC (this << " cloned socket " << oldsock << " to socket " << newsock);
   Ptr<QuicUdpBinding> udpBinding = CreateObject<QuicUdpBinding> ();
-  udpBinding->m_budpSocket = nullptr;
-  udpBinding->m_budpSocket6 = nullptr;
+
+  // Share listener socket so server answers from the poper port
+  for (auto it = m_quicUdpBindingList.begin (); it != m_quicUdpBindingList.end (); ++it)
+    {
+      if ((*it)->m_quicSocket == oldsock)
+        {
+          udpBinding->m_budpSocket = (*it)->m_budpSocket;
+          udpBinding->m_budpSocket6 = (*it)->m_budpSocket6;
+          udpBinding->m_socketType = (*it)->m_socketType;
+          break;
+        }
+    }
+
   udpBinding->m_quicSocket = newsock;
   m_quicUdpBindingList.insert (m_quicUdpBindingList.end (), udpBinding);
 
@@ -777,19 +799,24 @@ QuicL4Protocol::SendPacket (Ptr<QuicSocketBase> socket, Ptr<Packet> pkt, const Q
   // This will prepend the QuicHeader to the existing headers in 'pkt'.
   pkt->AddHeader (outgoing);
 
-  QuicUdpBindingList::const_iterator it;
-  for (it = m_quicUdpBindingList.begin (); it != m_quicUdpBindingList.end (); ++it)
+  for (auto it = m_quicUdpBindingList.begin (); it != m_quicUdpBindingList.end (); ++it)
     {
       Ptr<QuicUdpBinding> item = *it;
       if (item->m_quicSocket == socket)
         {
-          if (item->m_budpSocket)
+          if (item->m_socketType == QUIC_IPV4_UDP && item->m_budpSocket)
             {
-              UdpSend (item->m_budpSocket, pkt, 0);
+              if (item->m_hasPeerAddress)
+                item->m_budpSocket->SendTo (pkt, 0, item->m_peerAddress);
+              else
+                UdpSend (item->m_budpSocket, pkt, 0);
             }
-          else if (item->m_budpSocket6)
+          else if (item->m_socketType == QUIC_IPV6_UDP && item->m_budpSocket6)
             {
-              UdpSend (item->m_budpSocket6, pkt, 0);
+              if (item->m_hasPeerAddress)
+                item->m_budpSocket6->SendTo (pkt, 0, item->m_peerAddress);
+              else
+                UdpSend (item->m_budpSocket6, pkt, 0);
             }
           break;
         }

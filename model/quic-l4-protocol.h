@@ -38,6 +38,13 @@
 
 namespace ns3 {
 
+enum QuicSocketType
+{
+  QUIC_IPV4_UDP = 0,
+  QUIC_IPV6_UDP = 1,
+  QUIC_UNDETERMINED = 2
+};
+
 class QuicSocketBase;
 class Ipv4EndPointDemux;
 class Ipv6EndPointDemux;
@@ -62,6 +69,9 @@ public:
   Ptr<Socket> m_budpSocket6;         //!< The IPv6 UDP this binding is associated with
   Ptr<QuicSocketBase> m_quicSocket;  //!< The quic socket associated with this binding
   bool m_listenerBinding;            //!< A flag that indicates if in this binding resides the listening socket
+  QuicSocketType m_socketType;       //!< A flag that indicates the type of socket stored in this binding
+  Address m_peerAddress;             //!< Peer Address where to send dataframes 
+  bool m_hasPeerAddress;             //!< peerAddress validity flag
 };
 
 /**
