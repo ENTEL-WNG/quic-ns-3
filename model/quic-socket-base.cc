@@ -939,7 +939,8 @@ QuicSocketBase::AppendingTx (Ptr<Packet> frame, PacketNumberSpace space)
             "Added packet to the buffer - txBufSize = " << m_txBuffer->AppSize ()
                                                         << " Window = " << win);
 
-          SendPendingData (m_connected);
+          // Artificially delay the "flush" so that L5 has finished putting app bytes in to the buffer
+          Simulator::Schedule (MicroSeconds (1), &QuicSocketBase::SendPendingData, this, m_connected);
           return frame->GetSize ();
         }
     }
@@ -1325,13 +1326,13 @@ QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool 
 
   // Add padding to the packet to match segment size if app-limited
   uint32_t finalSize = p->GetSize () + head.GetSerializedSize ();
-  if (!isAckOnly && finalSize < GetSegSize () && m_txBuffer->AppSize () == 0)
-    {
-      uint32_t paddingSize = GetSegSize () - finalSize;
-      p->AddAtEnd (Create<Packet> (paddingSize));
-      finalSize += paddingSize;
-      NS_LOG_DEBUG ("Padded packet " << packetNumber << " by " << paddingSize << " bytes. Final size: " << finalSize);
-    }
+  // if (!isAckOnly && finalSize < GetSegSize () && m_txBuffer->AppSize () == 0)
+  //   {
+  //     uint32_t paddingSize = GetSegSize () - finalSize;
+  //     p->AddAtEnd (Create<Packet> (paddingSize));
+  //     finalSize += paddingSize;
+  //     NS_LOG_DEBUG ("Padded packet " << packetNumber << " by " << paddingSize << " bytes. Final size: " << finalSize);
+  //   }
 
   NS_LOG_INFO ("SendDataPacket of space " << space << " and size " << p->GetSize ());
   m_quicl4->SendPacket (this, p, head);
@@ -1933,144 +1934,141 @@ QuicSocketBase::SendInitialHandshake (uint8_t type,
                                       const QuicHeader &quicHeader,
                                       Ptr<Packet> packet)
  {
-   NS_LOG_FUNCTION (this << m_vers);
+  NS_LOG_FUNCTION (this << m_vers);
+
+  if (type == QuicHeader::VERSION_NEGOTIATION)
+    {
+      NS_LOG_INFO ("Create VERSION_NEGOTIATION");
+      m_receivedTransportParameters = false;
+      m_couldContainTransportParameters = true;
+
+      std::vector<uint32_t> supportedVersions;
+      supportedVersions.push_back (QUIC_VERSION);
+      supportedVersions.push_back (QUIC_VERSION_NS3_IMPL);
+
+      uint8_t *buffer = new uint8_t[4 * supportedVersions.size ()];
+
+      Ptr<Packet> payload = Create<Packet> (buffer,
+                                            4 * supportedVersions.size ());
+
+      for (uint8_t i = 0; i < (uint8_t) supportedVersions.size (); i++)
+        {
+
+          buffer[4 * i] = (supportedVersions[i]);
+          buffer[4 * i + 1] = (supportedVersions[i] >> 8);
+          buffer[4 * i + 2] = (supportedVersions[i] >> 16);
+          buffer[4 * i + 3] = (supportedVersions[i] >> 24);
+          //NS_LOG_INFO(" " << (uint64_t) buffer[4*i] << " " << (uint64_t)buffer[4*i+1] << " " << (uint64_t)buffer[4*i+2] << " " << (uint64_t)buffer[4*i+3] );
+
+        }
+
+      Ptr<Packet> p = Create<Packet> (buffer, 4 * supportedVersions.size ());
+      QuicHeader head = QuicHeader::CreateVersionNegotiation (
+        quicHeader.GetConnectionId (),
+        QUIC_VERSION_NEGOTIATION,
+        supportedVersions);
+
+      // Set initial congestion window and Ssthresh
+      m_tcb->m_cWnd = m_tcb->m_initialCWnd;
+      m_tcb->m_ssThresh = m_tcb->m_initialSsThresh;
+
+      m_quicl4->SendPacket (this, p, head);
+      m_txTrace (p, head, this);
+      NotifyDataSent (p->GetSize ());
+
+    }
+  else if (type == QuicHeader::INITIAL)
+    {
+      // Set initial congestion window and Ssthresh
+      m_tcb->m_cWnd = m_tcb->m_initialCWnd;
+      m_tcb->m_ssThresh = m_tcb->m_initialSsThresh;
+
+      NS_LOG_INFO ("Create INITIAL");
+      Ptr<Packet> p = Create<Packet> ();
+      
+      QuicTransportParameters tp = OnSendingTransportParameters ();
+      Ptr<Packet> tpPkt = Create<Packet> ();
+      tpPkt->AddHeader (tp);
+      
+      QuicSubheader crypto = QuicSubheader::CreateCrypto (0, tpPkt->GetSize ());
+      p->AddHeader (crypto);
+      p->AddAtEnd (tpPkt);
+
+      // RFC 9000 Section 14.1: Initial packets must be padded to at least 1200 bytes.
+      // We assume 0 header size to be safe and ensure the total packet size is always >= 1200.
+      uint32_t currentSize = p->GetSize ();
+      if (currentSize < GetInitialPacketSize ())
+        {
+          Ptr<Packet> padding = Create<Packet> (GetInitialPacketSize () - currentSize);
+          p->AddAtEnd (padding);
+        }
+
+      // RFC 9000: CRYPTO frames go directly to socket TX buffer, not through a stream
+      AppendingTx (p, INITIAL_DATA);
  
-   if (type == QuicHeader::VERSION_NEGOTIATION)
-     {
-       NS_LOG_INFO ("Create VERSION_NEGOTIATION");
-       m_receivedTransportParameters = false;
-       m_couldContainTransportParameters = true;
+    }
+  else if (type == QuicHeader::RETRY)
+    {
+      NS_LOG_INFO ("Create RETRY");
+      Ptr<Packet> p = Create<Packet> ();
+      QuicTransportParameters tp = OnSendingTransportParameters ();
+      Ptr<Packet> tpPkt = Create<Packet> ();
+      tpPkt->AddHeader (tp);
+      
+      QuicSubheader crypto = QuicSubheader::CreateCrypto (0, tpPkt->GetSize ());
+      p->AddHeader (crypto);
+      p->AddAtEnd (tpPkt);
+
+      // RFC 9000: CRYPTO frames go directly to socket TX buffer, not through a stream
+      AppendingTx (p, INITIAL_DATA);
+    }
+  else if (type == QuicHeader::HANDSHAKE)
+    {
+      NS_LOG_INFO ("Create HANDSHAKE");
+      Ptr<Packet> p = Create<Packet> ();
+      if (m_socketState == CONNECTING_SVR)
+        {
+          QuicTransportParameters tp = OnSendingTransportParameters ();
+          Ptr<Packet> tpPkt = Create<Packet> ();
+          tpPkt->AddHeader (tp);
+          
+          QuicSubheader crypto = QuicSubheader::CreateCrypto (0, tpPkt->GetSize ());
+          p->AddHeader (crypto);
+          p->AddAtEnd (tpPkt);
+        }
+
+      // RFC 9000: CRYPTO frames go directly to socket TX buffer, not through a stream
+      if (p->GetSize () > 0)
+        {
+          AppendingTx (p, HANDSHAKE_DATA);
+        }
+      m_congestionControl->CongestionStateSet (m_tcb,
+                                              TcpSocketState::CA_OPEN);
+    }
+  else if (type == QuicHeader::ZERO_RTT)
+    {
+    NS_LOG_INFO ("Create ZERO_RTT");
+    Ptr<Packet> p = Create<Packet> ();
+    QuicTransportParameters tp = OnSendingTransportParameters ();
+    Ptr<Packet> tpPkt = Create<Packet> ();
+    tpPkt->AddHeader (tp);
+    
+    QuicSubheader crypto = QuicSubheader::CreateCrypto (0, tpPkt->GetSize ());
+    p->AddHeader (crypto);
+    p->AddAtEnd (tpPkt);
+
+    // Set initial congestion window and Ssthresh
+    m_tcb->m_cWnd = m_tcb->m_initialCWnd;
+    m_tcb->m_ssThresh = m_tcb->m_initialSsThresh;
+
+    // RFC 9000: CRYPTO frames go directly to socket TX buffer, not through a stream
+    AppendingTx (p);
  
-       std::vector<uint32_t> supportedVersions;
-       supportedVersions.push_back (QUIC_VERSION);
-       supportedVersions.push_back (QUIC_VERSION_NS3_IMPL);
- 
-       uint8_t *buffer = new uint8_t[4 * supportedVersions.size ()];
- 
-       Ptr<Packet> payload = Create<Packet> (buffer,
-                                             4 * supportedVersions.size ());
- 
-       for (uint8_t i = 0; i < (uint8_t) supportedVersions.size (); i++)
-         {
- 
-           buffer[4 * i] = (supportedVersions[i]);
-           buffer[4 * i + 1] = (supportedVersions[i] >> 8);
-           buffer[4 * i + 2] = (supportedVersions[i] >> 16);
-           buffer[4 * i + 3] = (supportedVersions[i] >> 24);
-           //NS_LOG_INFO(" " << (uint64_t) buffer[4*i] << " " << (uint64_t)buffer[4*i+1] << " " << (uint64_t)buffer[4*i+2] << " " << (uint64_t)buffer[4*i+3] );
- 
-         }
- 
-       Ptr<Packet> p = Create<Packet> (buffer, 4 * supportedVersions.size ());
-       QuicHeader head = QuicHeader::CreateVersionNegotiation (
-         quicHeader.GetConnectionId (),
-         QUIC_VERSION_NEGOTIATION,
-         supportedVersions);
- 
-       // Set initial congestion window and Ssthresh
-       m_tcb->m_cWnd = m_tcb->m_initialCWnd;
-       m_tcb->m_ssThresh = m_tcb->m_initialSsThresh;
- 
-       m_quicl4->SendPacket (this, p, head);
-       m_txTrace (p, head, this);
-       NotifyDataSent (p->GetSize ());
- 
-     }
-   else if (type == QuicHeader::INITIAL)
-     {
-       // Set initial congestion window and Ssthresh
-       m_tcb->m_cWnd = m_tcb->m_initialCWnd;
-       m_tcb->m_ssThresh = m_tcb->m_initialSsThresh;
- 
-       NS_LOG_INFO ("Create INITIAL");
-       Ptr<Packet> p = Create<Packet> ();
-       
-       QuicTransportParameters tp = OnSendingTransportParameters ();
-       Ptr<Packet> tpPkt = Create<Packet> ();
-       tpPkt->AddHeader (tp);
-       
-       QuicSubheader crypto = QuicSubheader::CreateCrypto (0, tpPkt->GetSize ());
-       p->AddHeader (crypto);
-       p->AddAtEnd (tpPkt);
- 
-       // RFC 9000 Section 14.1: Initial packets must be padded to at least 1200 bytes.
-       // We assume 0 header size to be safe and ensure the total packet size is always >= 1200.
-       uint32_t currentSize = p->GetSize ();
-       if (currentSize < GetInitialPacketSize ())
-         {
-           Ptr<Packet> padding = Create<Packet> (GetInitialPacketSize () - currentSize);
-           p->AddAtEnd (padding);
-         }
- 
-       // RFC 9000: CRYPTO frames go directly to socket TX buffer, not through a stream
-       AppendingTx (p, INITIAL_DATA);
- 
-     }
-   else if (type == QuicHeader::RETRY)
-     {
-       NS_LOG_INFO ("Create RETRY");
-       Ptr<Packet> p = Create<Packet> ();
-       QuicTransportParameters tp = OnSendingTransportParameters ();
-       Ptr<Packet> tpPkt = Create<Packet> ();
-       tpPkt->AddHeader (tp);
-       
-       QuicSubheader crypto = QuicSubheader::CreateCrypto (0, tpPkt->GetSize ());
-       p->AddHeader (crypto);
-       p->AddAtEnd (tpPkt);
- 
-       // RFC 9000: CRYPTO frames go directly to socket TX buffer, not through a stream
-       AppendingTx (p, INITIAL_DATA);
-     }
-   else if (type == QuicHeader::HANDSHAKE)
-     {
-       NS_LOG_INFO ("Create HANDSHAKE");
-       Ptr<Packet> p = Create<Packet> ();
-       if (m_socketState == CONNECTING_SVR)
-         {
-           QuicTransportParameters tp = OnSendingTransportParameters ();
-           Ptr<Packet> tpPkt = Create<Packet> ();
-           tpPkt->AddHeader (tp);
-           
-           QuicSubheader crypto = QuicSubheader::CreateCrypto (0, tpPkt->GetSize ());
-           p->AddHeader (crypto);
-           p->AddAtEnd (tpPkt);
-         }
- 
-       // RFC 9000: CRYPTO frames go directly to socket TX buffer, not through a stream
-       if (p->GetSize () > 0)
-         {
-           AppendingTx (p, HANDSHAKE_DATA);
-         }
-       m_congestionControl->CongestionStateSet (m_tcb,
-                                                TcpSocketState::CA_OPEN);
-     }
-   else if (type == QuicHeader::ZERO_RTT)
-     {
-       NS_LOG_INFO ("Create ZERO_RTT");
-       Ptr<Packet> p = Create<Packet> ();
-       QuicTransportParameters tp = OnSendingTransportParameters ();
-       Ptr<Packet> tpPkt = Create<Packet> ();
-       tpPkt->AddHeader (tp);
-       
-       QuicSubheader crypto = QuicSubheader::CreateCrypto (0, tpPkt->GetSize ());
-       p->AddHeader (crypto);
-       p->AddAtEnd (tpPkt);
- 
-       // Set initial congestion window and Ssthresh
-       m_tcb->m_cWnd = m_tcb->m_initialCWnd;
-       m_tcb->m_ssThresh = m_tcb->m_initialSsThresh;
- 
-       // RFC 9000: CRYPTO frames go directly to socket TX buffer, not through a stream
-       AppendingTx (p);
- 
-     }
+    }
   else
     {
-
       NS_LOG_INFO ("Wrong Handshake Type");
-
       return;
-
     }
 }
 
