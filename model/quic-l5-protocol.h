@@ -171,20 +171,13 @@ public:
   Ptr<QuicStreamBase> SearchStream (uint64_t streamId);
 
   /**
-   * \brief Create a stream with ID equal to the number of already created streams
-   *
-   * \param streamDirectionType the stream direction
-   */
-  void CreateStream (const QuicStream::QuicStreamDirectionTypes_t streamDirectionType);
-
-  /**
-   * \brief create streamNum streams to be associated to this L5 object
+   * \brief create a new stream to be associated to this L5 object
    *
    * \param streamDirectionType the QUIC stream direction type,
    *   i.e., unidirectional or bidirectional
-   * \param the number of streams to be created
+   * \param the id of the stream to be created
    */
-  void CreateStream (const QuicStream::QuicStreamDirectionTypes_t streamDirectionType, uint64_t streamNum);
+  void CreateStream (const QuicStream::QuicStreamDirectionTypes_t streamDirectionType, uint64_t streamId);
 
   /**
    * \brief Get the maximum packet size from the underlying socket
@@ -229,6 +222,13 @@ public:
    */
   uint64_t GetMaxData ();
 
+  /**
+   * \brief Generate the next StreamID (taking into account if it's a client or server)
+   * \param isBidi true for bidireccional stream, false for unidireccional
+   * \return Next valid Stream ID
+   */
+  uint64_t GetNextStreamId (bool isBidi);
+
   const std::vector<Ptr<QuicStreamBase> >& GetStreams() const;
 
 private:
@@ -236,6 +236,9 @@ private:
   Ptr<Node> m_node;                             //!< The node this stack is associated with
   uint64_t m_connectionId;                      //!< The connection id this stack is associated with
   std::vector<Ptr<QuicStreamBase> > m_streams;  //!< The streams this stack is associated with
+  uint64_t m_nextBidiStreamId;                  //!< The counter for the next bidirectional stream ID
+  uint64_t m_nextUniStreamId;                   //!< The counter for the next unidirectional stream ID
+  bool m_streamCountersInitialized;
 };
 
 } // namespace ns3

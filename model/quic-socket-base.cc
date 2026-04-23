@@ -114,21 +114,17 @@ QuicSocketBase::GetTypeId (void)
                    MakeUintegerChecker<uint32_t> ())
     .AddAttribute ("MaxStreamIdBidi",
                    "Maximum StreamId for Bidirectional Streams",
-                   UintegerValue (2),
+                   UintegerValue (5),
                    MakeUintegerAccessor (&QuicSocketBase::m_initial_max_stream_id_bidi),
                    MakeUintegerChecker<uint32_t> ())
     .AddAttribute ("MaxStreamIdUni", "Maximum StreamId for Unidirectional Streams",
-                   UintegerValue (2),
+                   UintegerValue (5),
                    MakeUintegerAccessor (&QuicSocketBase::m_initial_max_stream_id_uni),
                    MakeUintegerChecker<uint32_t> ())
     .AddAttribute ("MaxTrackedGaps", "Maximum number of gaps in an ACK",
                    UintegerValue (20),
                    MakeUintegerAccessor (&QuicSocketBase::m_maxTrackedGaps),
                    MakeUintegerChecker<uint32_t> ())
-    .AddAttribute ("OmitConnectionId", "Omit ConnectionId field in Short QuicHeader format",
-                   BooleanValue (false),
-                   MakeBooleanAccessor (&QuicSocketBase::m_omit_connection_id),
-                   MakeBooleanChecker ())
     .AddAttribute ("MaxPacketSize", "Maximum Packet Size",
                    UintegerValue (1460),
                    MakeUintegerAccessor (&QuicSocketBase::GetSegSize,
@@ -451,7 +447,6 @@ QuicSocketBase::QuicSocketBase (void)
     m_max_data (0),
     m_initial_max_stream_id_bidi (0),
     m_idleTimeout (Seconds (300.0)),
-    m_omit_connection_id (false),
     m_ack_delay_exponent (3),
     m_max_ack_delay (MilliSeconds (25)),
     m_initial_max_stream_id_uni (0),
@@ -538,7 +533,6 @@ QuicSocketBase::QuicSocketBase (const QuicSocketBase& sock)   // Copy constructo
     m_max_data (sock.m_max_data),
     m_initial_max_stream_id_bidi (sock.m_initial_max_stream_id_bidi),
     m_idleTimeout (sock.m_idleTimeout),
-    m_omit_connection_id (sock.m_omit_connection_id),
     m_ack_delay_exponent (sock.m_ack_delay_exponent),
     m_max_ack_delay (sock.m_max_ack_delay),
     m_initial_max_stream_id_uni (sock.m_initial_max_stream_id_uni),
@@ -815,15 +809,6 @@ QuicSocketBase::Connect (const Address & address)
         }
       InetSocketAddress transport = InetSocketAddress::ConvertFrom (address);
       m_endPoint->SetPeer (transport.GetIpv4 (), transport.GetPort ());
-      //SetIpTos (transport.GetTos ());
-      // m_endPoint6 = nullptr;
-
-      // Get the appropriate local address and port number from the routing protocol and set up endpoint
-      /*if (SetupEndpoint () != 0)
-        {
-          NS_LOG_ERROR ("Route to destination does not exist ?!");
-          return -1;
-        }*/
     }
   else if (Inet6SocketAddress::IsMatchingType (address))
     {
@@ -847,14 +832,6 @@ QuicSocketBase::Connect (const Address & address)
           NS_ASSERT (m_endPoint6);
         }
       m_endPoint6->SetPeer (v6Addr, transport.GetPort ());
-      // m_endPoint = nullptr;
-
-      // Get the appropriate local address and port number from the routing protocol and set up endpoint
-      /*if (SetupEndpoint6 () != 0)
-        {
-          NS_LOG_ERROR ("Route to destination does not exist ?!");
-          return -1;
-        }*/
     }
   else
     {
@@ -1207,7 +1184,7 @@ QuicSocketBase::SendAck (PacketNumberSpace space)
   else
     {
       head = QuicHeader::CreateShort (m_connectionId, packetNumber,
-                                      !m_omit_connection_id, m_keyPhase);
+                                      true, m_keyPhase);
     }
 
   uint32_t finalSize = p->GetSize () + head.GetSerializedSize ();
@@ -1342,7 +1319,7 @@ QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool 
       else
         {
           head = QuicHeader::CreateShort (m_connectionId, packetNumber,
-                                          !m_omit_connection_id, m_keyPhase);
+                                          true, m_keyPhase);
         }
     }
 
@@ -1426,7 +1403,6 @@ QuicSocketBase::SetReTxTimeout ()
     }
 
   // 2. PTO Timer: Calculate based on Smoothed RTT and RTT Variance
-  PacketNumberSpace ptoSpace = APPLICATION_DATA;
   Time earliestPTO = Time::Max ();
   bool anyOutstanding = false;
 
@@ -1451,7 +1427,6 @@ QuicSocketBase::SetReTxTimeout ()
       if (ptoTime < earliestPTO)
         {
           earliestPTO = ptoTime;
-          ptoSpace = static_cast<PacketNumberSpace>(i);
           anyOutstanding = true;
         }
     }
@@ -1743,7 +1718,7 @@ QuicSocketBase::SendConnectionClosePacket (uint16_t errorCode, std::string phras
   if (space == INITIAL_DATA) head = QuicHeader::CreateInitial (m_connectionId, m_vers, packetNumber);
   else if (space == HANDSHAKE_DATA) head = QuicHeader::CreateHandshake (m_connectionId, m_vers, packetNumber);
   else head = QuicHeader::CreateShort (m_connectionId, packetNumber,
-                                  !m_omit_connection_id, m_keyPhase);
+                                  true, m_keyPhase);
 
 
   NS_LOG_DEBUG ("Send Connection Close packet with header " << head);
@@ -2479,7 +2454,7 @@ QuicSocketBase::OnSendingTransportParameters ()
   transportParameters = transportParameters.CreateTransportParameters (
     m_initial_max_stream_data, m_max_data, m_initial_max_stream_id_bidi,
     (uint16_t) m_idleTimeout.Get ().GetSeconds (),
-    (uint8_t) m_omit_connection_id, m_tcb->m_segmentSize,
+    m_tcb->m_segmentSize,
     m_ack_delay_exponent, (uint16_t) m_max_ack_delay.GetMilliSeconds (), 
     m_initial_max_stream_id_uni);
 
@@ -2523,7 +2498,7 @@ QuicSocketBase::OnReceivedTransportParameters (
     }
 
   NS_LOG_DEBUG (
-    "Before applying received transport parameters " << " m_initial_max_stream_data " << m_initial_max_stream_data << " m_max_data " << m_max_data << " m_initial_max_stream_id_bidi " << m_initial_max_stream_id_bidi << " m_idleTimeout " << m_idleTimeout << " m_omit_connection_id " << m_omit_connection_id << " m_tcb->m_segmentSize " << m_tcb->m_segmentSize << " m_ack_delay_exponent " << m_ack_delay_exponent << " m_initial_max_stream_id_uni " << m_initial_max_stream_id_uni);
+    "Before applying received transport parameters " << " m_initial_max_stream_data " << m_initial_max_stream_data << " m_max_data " << m_max_data << " m_initial_max_stream_id_bidi " << m_initial_max_stream_id_bidi << " m_idleTimeout " << m_idleTimeout << " m_tcb->m_segmentSize " << m_tcb->m_segmentSize << " m_ack_delay_exponent " << m_ack_delay_exponent << " m_initial_max_stream_id_uni " << m_initial_max_stream_id_uni);
 
   m_initial_max_stream_data = std::min (
     transportParameters.GetInitialMaxStreamData (),
@@ -2541,9 +2516,6 @@ QuicSocketBase::OnReceivedTransportParameters (
     std::min (transportParameters.GetIdleTimeout (),
               (uint16_t) m_idleTimeout.Get ().GetSeconds ()) * 1e9);
 
-  m_omit_connection_id = std::min (transportParameters.GetOmitConnection (),
-                                   (uint8_t) m_omit_connection_id);
-
   m_tcb->m_peerMaxAckDelay = MilliSeconds (transportParameters.GetMaxAckDelay ());
 
   SetSegSize (
@@ -2559,7 +2531,7 @@ QuicSocketBase::OnReceivedTransportParameters (
     m_initial_max_stream_id_uni);
 
   NS_LOG_DEBUG (
-    "After applying received transport parameters " << " m_initial_max_stream_data " << m_initial_max_stream_data << " m_max_data " << m_max_data << " m_initial_max_stream_id_bidi " << m_initial_max_stream_id_bidi << " m_idleTimeout " << m_idleTimeout << " m_omit_connection_id " << m_omit_connection_id << " m_tcb->m_segmentSize " << m_tcb->m_segmentSize << " m_ack_delay_exponent " << m_ack_delay_exponent << " m_initial_max_stream_id_uni " << m_initial_max_stream_id_uni);
+    "After applying received transport parameters " << " m_initial_max_stream_data " << m_initial_max_stream_data << " m_max_data " << m_max_data << " m_initial_max_stream_id_bidi " << m_initial_max_stream_id_bidi << " m_idleTimeout " << m_idleTimeout << " m_tcb->m_segmentSize " << m_tcb->m_segmentSize << " m_ack_delay_exponent " << m_ack_delay_exponent << " m_initial_max_stream_id_uni " << m_initial_max_stream_id_uni);
 }
 
 int
@@ -3003,13 +2975,13 @@ QuicSocketBase::AbortConnection (uint16_t transportErrorCode,
                                        m_pnSpaces[space].m_nextTxSequence++) :
           QuicHeader::CreateShort (m_connectionId,
                                    m_pnSpaces[space].m_nextTxSequence++,
-                                   !m_omit_connection_id, m_keyPhase);
+                                   true, m_keyPhase);
         break;
       case CLOSING:
         space = APPLICATION_DATA;
         quicHeader = QuicHeader::CreateShort (m_connectionId,
                                                m_pnSpaces[space].m_nextTxSequence++,
-                                               !m_omit_connection_id,
+                                               true,
                                                m_keyPhase);
         break;
       default:
@@ -3100,7 +3072,7 @@ QuicSocketBase::SendPathResponse (uint64_t data)
     }
   else if (m_socketState == OPEN)
     {
-      head = QuicHeader::CreateShort (m_connectionId, next, !m_omit_connection_id, m_keyPhase);
+      head = QuicHeader::CreateShort (m_connectionId, next, true, m_keyPhase);
     }
 
   m_quicl4->SendPacket (this, p, head);

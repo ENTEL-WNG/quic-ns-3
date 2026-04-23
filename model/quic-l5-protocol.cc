@@ -75,7 +75,10 @@ QuicL5Protocol::GetTypeId (void)
 QuicL5Protocol::QuicL5Protocol ()
   : m_socket (0),
   m_node (0),
-  m_connectionId ()
+  m_connectionId (),
+  m_nextBidiStreamId (0),
+  m_nextUniStreamId (0),
+  m_streamCountersInitialized (false)
 {
   NS_LOG_FUNCTION_NOARGS ();
   NS_LOG_LOGIC ("Made a QuicL5Protocol " << this);
@@ -91,27 +94,46 @@ QuicL5Protocol::~QuicL5Protocol ()
 
 void
 QuicL5Protocol::CreateStream (
-  const QuicStreamBase::QuicStreamDirectionTypes_t streamDirectionType)
+  const QuicStream::QuicStreamDirectionTypes_t streamDirectionType,
+  uint64_t streamId)
 {
-  NS_LOG_FUNCTION (this);
-  NS_LOG_INFO ("Create the stream with ID " << m_streams.size ());
+  NS_LOG_FUNCTION (this << m_streams.size () << streamId);
+
+  // RFC 9000: Last 2 bits indicate Stream Type
+  uint64_t typeMask = 0x00000003;
+  uint8_t type = streamId & typeMask;
+  bool isBidi = (type == QuicStream::CLIENT_INITIATED_BIDIRECTIONAL || type == QuicStream::SERVER_INITIATED_BIDIRECTIONAL);
+
+  uint32_t limit = isBidi ? m_socket->GetMaxStreamIdBidirectional () : m_socket->GetMaxStreamIdUnidirectional ();
+
+  // Check limits as per RFC 9000
+  if (streamId / 4 >= limit)
+    {
+      NS_LOG_INFO ("Stream ID " << streamId << " exceeds limit (count limit: " << limit << ")");
+      SignalAbortConnection (
+        QuicSubheader::TransportErrorCodes_t::STREAM_ID_ERROR, 
+        "Initiating Stream beyond negotiated limit (STREAM_LIMIT_ERROR)");
+      return;
+    }
+
+  // If exists, do nothing (lazy creation)
+  if (SearchStream(streamId))
+    {
+      return;
+    }
+
+  NS_LOG_DEBUG ("Create stream with exact ID " << streamId);
   Ptr<QuicStreamBase> stream = CreateObject<QuicStreamBase> ();
-
   stream->SetQuicL5 (this);
-
   stream->SetNode (m_node);
-
   stream->SetConnectionId (m_connectionId);
+  
+  // Assign requested ID
+  stream->SetStreamId (streamId);
 
-  stream->SetStreamId ((uint64_t) m_streams.size ());
-
-  uint64_t mask = 0x00000003;
-  if ((m_streams.size () & mask) == QuicStream::CLIENT_INITIATED_BIDIRECTIONAL
-      or (m_streams.size () & mask)
-      == QuicStream::SERVER_INITIATED_BIDIRECTIONAL)
+  if (isBidi)
     {
       stream->SetStreamDirectionType (QuicStream::BIDIRECTIONAL);
-
     }
   else
     {
@@ -119,43 +141,7 @@ QuicL5Protocol::CreateStream (
     }
 
   stream->SetMaxStreamData (m_socket->GetInitialMaxStreamData ());
-
   m_streams.push_back (stream);
-
-}
-
-void
-QuicL5Protocol::CreateStream (
-  const QuicStream::QuicStreamDirectionTypes_t streamDirectionType,
-  uint64_t streamNum)
-{
-
-  NS_LOG_FUNCTION (this << m_streams.size () << streamNum);
-
-
-  uint64_t typeMask = 0x00000003;
-  uint8_t type = streamNum & typeMask;
-  bool isBidi = (type == QuicStream::CLIENT_INITIATED_BIDIRECTIONAL || type == QuicStream::SERVER_INITIATED_BIDIRECTIONAL);
-  uint32_t limit = isBidi ? m_socket->GetMaxStreamIdBidirectional () : m_socket->GetMaxStreamIdUnidirectional ();
-
-  // The limit is the number of streams. Max ID = (limit - 1) * 4 + type.
-  // We check if the requested stream index (streamNum / 4) is within the limit.
-  if (streamNum / 4 >= limit)
-    {
-      NS_LOG_INFO ("Stream ID " << streamNum << " exceeds limit (Bidi limit: " << m_socket->GetMaxStreamIdBidirectional () << ", Uni limit: " << m_socket->GetMaxStreamIdUnidirectional () << ")");
-      SignalAbortConnection (
-        QuicSubheader::TransportErrorCodes_t::STREAM_ID_ERROR,
-        "Initiating Stream with higher StreamID with respect to what already negotiated");
-      return;
-    }
-
-  // create streamNum streams
-  while (m_streams.size () <= streamNum)
-    {
-      NS_LOG_INFO ("Create stream " << m_streams.size ());
-      CreateStream (streamDirectionType);
-    }
-
 }
 
 void
@@ -172,13 +158,11 @@ QuicL5Protocol::DispatchSend (Ptr<Packet> data)
 
   int sentData = 0;
 
-  // if the streams are not created yet, open the streams
-  // We use the combined limit for the total number of streams in this simplified model
-  uint32_t combinedLimit = m_socket->GetMaxStreamIdBidirectional () + m_socket->GetMaxStreamIdUnidirectional ();
-  if (m_streams.size () < combinedLimit)
+  if (m_streams.empty ())
     {
-      NS_LOG_INFO ("Create the missing streams up to " << combinedLimit);
-      CreateStream (QuicStream::SENDER, (combinedLimit - 1) * 4); // simplistic mapping
+      uint64_t newStreamId = GetNextStreamId (true); 
+      NS_LOG_INFO ("No streams available, creating a new bidirectional App Stream with ID " << newStreamId);
+      CreateStream (QuicStream::BIDIRECTIONAL, newStreamId);
     }
 
   std::vector<Ptr<Packet> > disgregated = DisgregateSend (data);
@@ -506,6 +490,37 @@ const std::vector<Ptr<QuicStreamBase> >&
 QuicL5Protocol::GetStreams() const
 {
   return m_streams;
+}
+
+uint64_t
+QuicL5Protocol::GetNextStreamId (bool isBidi)
+{
+  NS_LOG_FUNCTION (this << isBidi);
+
+  // Initialize counters first time we need an ID
+  if (!m_streamCountersInitialized)
+    {
+      bool isServer = m_socket->IsServer ();
+      // RFC 9000: Bidi Client=0, Bidi Server=1 | Uni Client=2, Uni Server=3
+      m_nextBidiStreamId = isServer ? 1 : 0;
+      m_nextUniStreamId  = isServer ? 3 : 2;
+      m_streamCountersInitialized = true;
+    }
+
+  uint64_t nextId = 0;
+  // adding +4 gives us the next valid ID for each type
+  if (isBidi)
+    {
+      nextId = m_nextBidiStreamId;
+      m_nextBidiStreamId += 4;
+    }
+  else
+    {
+      nextId = m_nextUniStreamId;
+      m_nextUniStreamId += 4;
+    }
+  
+  return nextId;
 }
 
 } // namespace ns3

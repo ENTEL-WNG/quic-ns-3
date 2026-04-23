@@ -40,7 +40,6 @@ QuicTransportParameters::QuicTransportParameters ()
   m_initial_max_data (0),
   m_initial_max_stream_id_bidi (0),
   m_idleTimeout (300),
-  m_omit_connection (false),
   m_max_packet_size (65527),
   m_ack_delay_exponent (3),
   m_max_ack_delay (25),
@@ -290,14 +289,13 @@ QuicTransportParameters::Print (std::ostream &os) const
 
 QuicTransportParameters
 QuicTransportParameters::CreateTransportParameters (uint32_t initial_max_stream_data, uint32_t initial_max_data, uint32_t initial_max_stream_id_bidi, uint16_t idleTimeout,
-                                                    uint8_t omit_connection, uint16_t max_packet_size, uint8_t ack_delay_exponent, uint16_t max_ack_delay, uint32_t initial_max_stream_id_uni, bool disable_migration)
+                                                    uint16_t max_packet_size, uint8_t ack_delay_exponent, uint16_t max_ack_delay, uint32_t initial_max_stream_id_uni, bool disable_migration)
 {
   QuicTransportParameters transport;
   transport.SetInitialMaxStreamData (initial_max_stream_data);
   transport.SetInitialMaxData (initial_max_data);
   transport.SetInitialMaxStreamIdBidi (initial_max_stream_id_bidi);
   transport.SetIdleTimeout (idleTimeout);
-  transport.SetOmitConnection (omit_connection);
   transport.SetMaxPacketSize (max_packet_size);
   transport.SetAckDelayExponent (ack_delay_exponent);
   transport.SetMaxAckDelay (max_ack_delay);
@@ -316,7 +314,6 @@ operator== (const QuicTransportParameters &lhs, const QuicTransportParameters &r
     && lhs.m_initial_max_data == rhs.m_initial_max_data
     && lhs.m_initial_max_stream_id_bidi  == rhs.m_initial_max_stream_id_bidi
     && lhs.m_idleTimeout == rhs.m_idleTimeout
-    && lhs.m_omit_connection == rhs.m_omit_connection
     && lhs.m_max_packet_size == rhs.m_max_packet_size
     && lhs.m_ack_delay_exponent == rhs.m_ack_delay_exponent
     && lhs.m_max_ack_delay == rhs.m_max_ack_delay
@@ -349,8 +346,6 @@ uint32_t QuicTransportParameters::GetInitialMaxStreamIdUni () const { return m_i
 void QuicTransportParameters::SetInitialMaxStreamIdUni (uint32_t initialMaxStreamIdUni) { m_initial_max_stream_id_uni = initialMaxStreamIdUni; }
 uint16_t QuicTransportParameters::GetMaxPacketSize () const { return m_max_packet_size; }
 void QuicTransportParameters::SetMaxPacketSize (uint16_t maxPacketSize) { m_max_packet_size = maxPacketSize; }
-uint8_t QuicTransportParameters::GetOmitConnection () const { return m_omit_connection; }
-void QuicTransportParameters::SetOmitConnection (uint8_t omitConnection) { m_omit_connection = omitConnection; }
 bool QuicTransportParameters::HasStatelessResetToken () const { return m_hasStatelessResetToken; }
 void QuicTransportParameters::SetHasStatelessResetToken (bool hasStatelessResetToken) { m_hasStatelessResetToken = hasStatelessResetToken; }
 void QuicTransportParameters::SetDisableActiveMigration (bool disable) { m_disableActiveMigration = disable; }

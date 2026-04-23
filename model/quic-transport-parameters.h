@@ -106,7 +106,6 @@ public:
    * \param initial_max_data the initial value for the maximum amount of data that can be sent on the connection
    * \param initial_max_stream_id_bidi the initial maximum number of application-owned bidirectional streams the peer may initiate
    * \param idleTimeout the idle timeout value in seconds
-   * \param omit_connection the flag that indicates if the connection id is required in the upcoming connection
    * \param max_packet_size the limit on the size of packets that the endpoint is willing to receive
    * \param ack_delay_exponent the exponent used to decode the ack delay field in the ACK frame
    * \param initial_max_stream_id_uni the initial maximum number of application-owned unidirectional streams the peer may initiate
@@ -114,7 +113,7 @@ public:
    * \return the generated QuicTransportParameters
    */
   static QuicTransportParameters CreateTransportParameters (uint32_t initial_max_stream_data, uint32_t initial_max_data, uint32_t initial_max_stream_id_bidi, uint16_t idleTimeout,
-                                                            uint8_t omit_connection, uint16_t max_packet_size, uint8_t ack_delay_exponent, uint16_t max_ack_delay, uint32_t initial_max_stream_id_uni, bool disable_migration = true);
+                                                            uint16_t max_packet_size, uint8_t ack_delay_exponent, uint16_t max_ack_delay, uint32_t initial_max_stream_id_uni, bool disable_migration = true);
 
   // Getters, Setters and Controls
 
@@ -201,18 +200,6 @@ public:
    * \param maxPacketSize the max packet size limit for this QuicTransportParameters
    */
   void SetMaxPacketSize (uint16_t maxPacketSize);
-
-  /**
-   * \brief Get the omit connection id flag
-   * \return The omit connection id flag for this QuicTransportParameters
-   */
-  uint8_t GetOmitConnection () const;
-
-  /**
-   * \brief Set the omit connection id flag
-   * \param omitConnection the omit connection id flag for this QuicTransportParameters
-   */
-  void SetOmitConnection (uint8_t omitConnection);
 
   /**
    * \brief Check if the stateless reset token was provided
@@ -311,7 +298,6 @@ private:
   uint32_t m_initial_max_data;            //!< The initial value for the maximum amount of data that can be sent on the connection
   uint32_t m_initial_max_stream_id_bidi;  //!< The initial maximum number of application-owned bidirectional streams the peer may initiate
   uint16_t m_idleTimeout;                 //!< The idle timeout value in seconds
-  uint8_t m_omit_connection;              //!< The flag that indicates if the connection id is required in the upcoming connection
   uint16_t m_max_packet_size;             //!< The limit on the size of packets that the endpoint is willing to receive
   uint8_t m_ack_delay_exponent;           //!< The exponent used to decode the ack delay field in the ACK frame
   uint16_t m_max_ack_delay;               //!< The maximum amount of time in milliseconds by which the endpoint will delay sending acknowledgments

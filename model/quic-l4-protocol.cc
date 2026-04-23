@@ -515,6 +515,9 @@ QuicL4Protocol::ForwardUp (Ptr<Socket> sock)
           socket->SetConnectionId (connectionId);
           socket->Connect (from);
           socket->SetupCallback ();
+          // Pass the cloned socket to the App so it can poll for new data
+          Ptr<QuicSocketBase> listenerSocket = m_quicUdpBindingList.front ()->m_quicSocket;
+          listenerSocket->NotifyAppNewConnection (socket, from);
         }
       // RFC 9000 Section 7.2: 0-RTT handling for servers
       else if (header.IsORTT () && m_isServer && !socket)
@@ -557,6 +560,12 @@ QuicL4Protocol::ForwardUp (Ptr<Socket> sock)
                   m_authAddresses.push_back (senderIp);
                 }
             }
+            // Look for the callback in order to deliver the packet
+            auto handlerIt = m_socketHandlers.find (socket);
+            if (handlerIt != m_socketHandlers.end ())
+              {
+                handlerIt->second (packet, header, from);
+              }
         }
       else
         {

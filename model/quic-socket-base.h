@@ -391,7 +391,13 @@ public:
    */
   uint32_t ConnectionWindow () const;
 
-
+  /**
+   * \brief Wrapper públic per notificar a l'aplicació d'una nova connexió acceptada
+   */
+  void NotifyAppNewConnection (Ptr<Socket> socket, const Address& from)
+  {
+    NotifyNewConnectionCreated (socket, from);
+  }
 
   /**
    * \brief Return total bytes in flight
@@ -712,6 +718,8 @@ public:
   typedef void (*QuicTxRxTracedCallback)(const Ptr<const Packet> packet, const QuicHeader& header,
                                          const Ptr<const QuicSocketBase> socket);
 
+  bool IsServer(void) const { return m_isServer;}
+
 protected:
   /**
    * \brief Connect the TCB traces
@@ -890,7 +898,6 @@ protected:
   uint32_t m_max_data;                   //!< The maximum amount of data that can be sent on the connection
   uint32_t m_initial_max_stream_id_bidi; //!< The the initial maximum number of application-owned bidirectional streams the peer may initiate
   TracedValue<Time> m_idleTimeout;       //!< The idle timeout value in seconds
-  bool m_omit_connection_id;             //!< The flag that indicates if the connection id is required in the upcoming connection
   uint8_t m_ack_delay_exponent;          //!< The exponent used to decode the ack delay field in the ACK frame
   Time m_max_ack_delay;                  //!< The maximum ack delay we promise to the peer
   uint32_t m_initial_max_stream_id_uni;  //!< The initial maximum number of application-owned unidirectional streams the peer may initiate
