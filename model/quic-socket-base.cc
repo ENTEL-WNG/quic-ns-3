@@ -1348,6 +1348,7 @@ QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool 
       m_txBuffer->UpdatePacketSent (packetNumber, finalSize, space);
     }
 
+  BytesInFlight ();
   // Update TCB trace for compatibility (though it might be confusing with 3 spaces)
   m_nextTxSequenceTrace (0, packetNumber.GetValue ());
 
@@ -1547,26 +1548,13 @@ QuicSocketBase::AvailableWindow () const
       flowControlAvail = m_max_data - totalPayloadSent;
     }
 
-  NS_LOG_INFO ("Congestion avail: " << congestionAvail 
+  NS_LOG_DEBUG ("Congestion avail: " << congestionAvail 
                << " bytes, Flow control avail: " << flowControlAvail << " bytes"
                << " (delivered: " << m_tcb->m_delivered 
                << ", unacked payload: " << unackedPayload << ")");
 
   // 3. Return the more restrictive limit
   return std::min (congestionAvail, flowControlAvail);
-}
-
-uint32_t
-QuicSocketBase::ConnectionWindow () const
-{
-  NS_LOG_FUNCTION (this);
-
-  uint32_t inFlight = m_txBuffer->GetCongestionControlledBytesInFlight ();
-
-  NS_LOG_INFO (
-    "Returning calculated Connection: MaxData " << m_max_data << " InFlight: " << inFlight);
-
-  return (inFlight > m_max_data) ? 0 : m_max_data - inFlight;
 }
 
 uint32_t

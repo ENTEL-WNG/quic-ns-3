@@ -385,19 +385,9 @@ public:
   uint32_t AvailableWindow () const;
 
   /**
-   * \brief Get the connection window
-   *
-   * \return the connection window
+   * \brief Public wrapper to notify acepted connections
    */
-  uint32_t ConnectionWindow () const;
-
-  /**
-   * \brief Wrapper públic per notificar a l'aplicació d'una nova connexió acceptada
-   */
-  void NotifyAppNewConnection (Ptr<Socket> socket, const Address& from)
-  {
-    NotifyNewConnectionCreated (socket, from);
-  }
+  void NotifyAppNewConnection (Ptr<Socket> socket, const Address& from) { NotifyNewConnectionCreated (socket, from); }
 
   /**
    * \brief Return total bytes in flight
