@@ -1080,11 +1080,11 @@ QuicSocketBase::MaybeQueueAck (PacketNumberSpace space)
     NS_LOG_INFO ("immediately schedule ACK - threshold reached");
     pnSpace.m_queue_ack = true;
     if (!pnSpace.m_sendAckEvent.IsRunning ())
-    {
+      {
         // Use ScheduleNow to break the function call stack
         pnSpace.m_sendAckEvent = Simulator::ScheduleNow(static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
+      }
     }
-}
 
   if (HasReceivedMissing ())  // immediately queue the ACK
     {
@@ -1093,6 +1093,15 @@ QuicSocketBase::MaybeQueueAck (PacketNumberSpace space)
       if (!pnSpace.m_sendAckEvent.IsRunning ())
         {
           pnSpace.m_sendAckEvent = Simulator::Schedule (TimeStep (1), static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
+        }
+    }
+  if (space == INITIAL_DATA || space == HANDSHAKE_DATA)
+    {
+      NS_LOG_INFO ("immediately send ACK - Initial/Handshake MUST NOT be delayed");
+      pnSpace.m_queue_ack = true;
+      if (!pnSpace.m_sendAckEvent.IsRunning ())
+        {
+          pnSpace.m_sendAckEvent = Simulator::ScheduleNow(static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
         }
     }
 
