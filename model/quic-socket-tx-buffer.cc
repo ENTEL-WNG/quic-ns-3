@@ -831,6 +831,12 @@ std::vector<Ptr<QuicSocketTxItem> > QuicSocketTxBuffer::DetectLostPackets (Ptr<T
         continue;
       }
 
+      // RFC 9002: Loss detection should check only packets sent before the largestAcked
+      if (unacked->m_packetNumber > m_socket->m_pnSpaces[space].m_largestAcked) {
+          sent_it++;
+          continue;
+      }
+
       bool is_lost = false;
 
       // RFC 9002 Section 6.1.1: Time-based loss detection
