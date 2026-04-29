@@ -181,9 +181,9 @@ QuicSocketBase::GetTypeId (void)
                    PointerValue (),
                    MakePointerAccessor (&QuicSocketBase::m_tcb),
                    MakePointerChecker<QuicSocketState> ())
-    .AddTraceSource ("PTO",
-                     "Probe timeout",
-                     MakeTraceSourceAccessor (&QuicSocketBase::m_pto),
+    .AddTraceSource ("PTOCounter",
+                     "The number of consecutive PTOs that have occurred",
+                     MakeTraceSourceAccessor (&QuicSocketBase::m_ptoCountTrace),
                      "ns3::Time::TracedValueCallback")
     .AddTraceSource ("RTT",
                      "Last RTT sample",
@@ -289,6 +289,10 @@ QuicSocketState::GetTypeId (void)
                    MakeUintegerAccessor (&QuicSocketState::SetMinimumWindowMultiplier,
                                          &QuicSocketState::GetMinimumWindowMultiplier),
                    MakeUintegerChecker<uint32_t> ())
+    .AddTraceSource ("PtoCount",
+                     "The number of consecutive PTOs that have occurred",
+                     MakeTraceSourceAccessor (&QuicSocketState::m_ptoCount),
+                     "ns3::TracedValueCallback::Uint32")
   ;
   return tid;
 }
@@ -364,7 +368,7 @@ QuicSocketState::QuicSocketState (const QuicSocketState &other)
     m_endOfRecovery (other.m_endOfRecovery),
     m_congestionRecoveryStartTime (other.m_congestionRecoveryStartTime),
     m_firstLostTime (other.m_firstLostTime),
-    m_ptoCount (other.m_ptoCount),
+    m_ptoCount (other.m_ptoCount.Get ()),
     m_priorInFlight (other.m_priorInFlight)
 {
   m_lossDetectionAlarm.Cancel ();
@@ -457,7 +461,6 @@ QuicSocketBase::QuicSocketBase (void)
     // Timers and Events
     m_idleTimeoutEvent (),
     m_drainingPeriodEvent (),
-    m_pto (Seconds (30.0)),
     m_drainingPeriodTimeout (Seconds (90.0)),
     m_flushOnClose (false),
     m_closeOnEmpty (false),
@@ -543,7 +546,6 @@ QuicSocketBase::QuicSocketBase (const QuicSocketBase& sock)   // Copy constructo
     // Timers
     m_idleTimeoutEvent (),
     m_drainingPeriodEvent (),
-    m_pto (sock.m_pto),
     m_drainingPeriodTimeout (sock.m_drainingPeriodTimeout),
     m_flushOnClose (sock.m_flushOnClose),
     m_closeOnEmpty (sock.m_closeOnEmpty),
@@ -621,6 +623,10 @@ QuicSocketBase::ConnectTcbTraces ()
   ok = m_tcb->TraceConnectWithoutContext ("BytesInFlight",
                                           MakeCallback (&QuicSocketBase::UpdateBytesInFlight, this));
   NS_ASSERT_MSG (ok == true, "Failed connection to bytes in flight trace");
+
+  ok = m_tcb->TraceConnectWithoutContext ("PtoCount",
+                                          MakeCallback (&QuicSocketBase::UpdatePtoCount, this));
+  NS_ASSERT_MSG (ok == true, "Failed connection to PTO count trace");
 }
 
 QuicSocketBase::~QuicSocketBase (void)
@@ -1432,7 +1438,7 @@ QuicSocketBase::SetReTxTimeout ()
         }
       
       // Exponential backoff for repeated timeouts
-      timeout = timeout * (1 << tcbd->m_ptoCount);
+      timeout = timeout * (1 << tcbd->m_ptoCount.Get());
       
       Time ptoTime = m_pnSpaces[i].m_timeOfLastSentAckElicitingPacket + timeout;
       if (ptoTime < earliestPTO)
@@ -1512,7 +1518,7 @@ QuicSocketBase::ReTxTimeout ()
   else // PTO_TIMER
     {
       NS_LOG_INFO ("PTO triggered");
-      m_tcb->m_ptoCount++;
+      m_tcb->m_ptoCount = m_tcb->m_ptoCount.Get() + 1;
       
       // Determine which space to send in. 
       PacketNumberSpace ptoSpace = APPLICATION_DATA;
@@ -3193,6 +3199,12 @@ QuicSocketBase::UpdateBytesInFlight (uint32_t oldValue, uint32_t newValue)
 {
   NS_LOG_FUNCTION (this << oldValue << newValue);
   m_bytesInFlightTrace (oldValue, newValue);
+}
+
+void
+QuicSocketBase::UpdatePtoCount (uint32_t oldValue, uint32_t newValue)
+{
+  m_ptoCountTrace (oldValue, newValue);
 }
 
 void

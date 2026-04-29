@@ -188,7 +188,7 @@ public:
                                                                 marked asdelivered was first sent */
   uint32_t              m_lastAckedSackedBytes {0};         //!< Size of data sacked in the last ack
   uint32_t              m_ackBytesSent    {0};              //!< amount of ACK-only bytes sent
-  uint32_t              m_ptoCount         {0};              //!< Number of consecutive probe periods without an ACK
+  TracedValue<uint32_t> m_ptoCount         {0};              //!< Current number of consecutive probe periods without an ACK
   uint32_t              m_priorInFlight    {0};              //!< Bytes in flight before the current ACK was processed
 };
 
@@ -587,6 +587,14 @@ public:
    */
   void UpdateBytesInFlight (uint32_t oldValue, uint32_t newValue);
 
+    /**
+   * \brief Callback function to hook to QuicSocketState PTO count
+   *
+   * \param oldValue old PTO count value
+   * \param newValue new PTO count value
+   */
+  void UpdatePtoCount (uint32_t oldValue, uint32_t newValue);
+
   /**
    * \brief Set the initial Slow Start Threshold.
    *
@@ -900,7 +908,6 @@ protected:
   // Timers and Events
   EventId m_idleTimeoutEvent;                 //!< Event triggered upon receiving or sending a packet, when it expires the connection closes
   EventId m_drainingPeriodEvent;              //!< Event triggered upon idle timeout or immediate connection close, when it expires all closes
-  TracedValue<Time> m_pto;                    //!< Probe timeout
   TracedValue<Time> m_drainingPeriodTimeout;  //!< Draining Period timeout
   bool m_flushOnClose;                        //!< Control behavior on connection close
   bool m_closeOnEmpty;                        //!< True if the socket will close after sending the buffered packets
@@ -947,6 +954,11 @@ protected:
   * \brief Callback pointer for bytes in flight trace chaining
   */
   TracedCallback<uint32_t, uint32_t> m_bytesInFlightTrace;
+
+  /**
+  * \brief Callback pointer for PTO counter trace chaining
+  */
+  TracedCallback<uint32_t, uint32_t> m_ptoCountTrace;
 
   // The following two traces pass a packet with a QUIC header
   TracedCallback<Ptr<const Packet>, const QuicHeader&,
