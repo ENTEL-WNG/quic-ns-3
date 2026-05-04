@@ -462,13 +462,6 @@ public:
   uint32_t GetMaxStreamId () const;
 
   /**
-   * \brief return true if the packet that has just been received contains transport params
-   *
-   * \return a boolean, true if the packet that has just been received contains transport params
-   */
-  bool CouldContainTransportParameters () const;
-
-  /**
    * \brief Get the maximum of stream ID for bidirectional streams (i.e., number of streams - 1)
    *
    * Consider bidirectional stream IDs
@@ -903,7 +896,6 @@ protected:
 
   // Transport Parameters management
   bool m_receivedTransportParameters;      //!< Check if Transport Parameters are already been received
-  bool m_couldContainTransportParameters;  //!< Check if in the actual conditions can receive Transport Parameters
 
   // Timers and Events
   EventId m_idleTimeoutEvent;                 //!< Event triggered upon receiving or sending a packet, when it expires the connection closes

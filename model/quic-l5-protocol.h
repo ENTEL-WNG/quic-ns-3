@@ -187,13 +187,6 @@ public:
   uint16_t GetMaxPacketSize () const;
 
   /**
-   * \brief Check with the QUIC socket if the packet that has just been received could contain transport parameters
-   *
-   * \return a boolean, true if the packet that has just been received contains transport params
-   */
-  bool ContainsTransportParameters ();
-
-  /**
    * \brief Pass the transportParameters to the the QUIC socket
    *
    * \param transportParameters the QuicTransportParameters

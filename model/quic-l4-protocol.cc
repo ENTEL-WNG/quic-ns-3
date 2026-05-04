@@ -126,7 +126,7 @@ QuicL4Protocol::GetTypeId (void)
                    TypeIdValue (RttMeanDeviation::GetTypeId ()),
                    MakeTypeIdAccessor (&QuicL4Protocol::m_rttTypeId),
                    MakeTypeIdChecker ())
-    .AddAttribute ("0RTT-Handshake", "0RTT-Handshake start",
+    .AddAttribute ("0RTT-Handshake", "Initiate/Accept 0RTT-Handshakes",
                    BooleanValue (false),
                    MakeBooleanAccessor (&QuicL4Protocol::m_0RTTHandshakeStart),
                    MakeBooleanChecker ())
@@ -541,6 +541,9 @@ QuicL4Protocol::ForwardUp (Ptr<Socket> sock)
           socket->SetConnectionId (connectionId);
           socket->Connect (from);
           socket->SetupCallback ();
+          // We must notify the application about the new socket just like we do for INITIAL packets!
+          Ptr<QuicSocketBase> listenerSocket = m_quicUdpBindingList.front ()->m_quicSocket;
+          listenerSocket->NotifyAppNewConnection (socket, from);
         }
 
       // 3. AUTHENTICATION

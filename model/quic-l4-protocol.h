@@ -303,9 +303,9 @@ public:
   bool IsServer (void) const;
 
   /**
-   * \brief Check if this L4 Protocol allows the 0-Rtt Handshake start
+   * \brief Check if this L4 Protocol initiates/accepts connections with 0-Rtt Handshake
    *
-   * \return true if this L4 Protocol allows the 0-Rtt Handshake start, otherwhise false
+   * \return true if allowed, otherwhise false
    */
   bool Is0RTTHandshakeAllowed () const;
 

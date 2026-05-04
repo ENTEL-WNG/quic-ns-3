@@ -355,15 +355,11 @@ QuicStreamBase::Recv (Ptr<Packet> frame, const QuicSubheader& sub, Address &addr
       break;
 
     case QuicSubheader::CRYPTO:
-      // RFC 9000: CRYPTO frames are handled at the socket level, not at the stream level.
-      // They should not be routed to any stream. If we get here, it's a protocol violation.
-      NS_LOG_INFO ("Received CRYPTO frame, processing transport parameters");
-      if (m_quicl5->ContainsTransportParameters ()) 
-        {
-          QuicTransportParameters transport;
-          frame->RemoveHeader (transport);
-          m_quicl5->OnReceivedTransportParameters (transport);
-        }
+      // According to RFC 9000, CRYPTO frames are handled at the connection (socket) level.
+      // They are NOT stream-specific and should never be routed here.
+      m_quicl5->SignalAbortConnection (QuicSubheader::TransportErrorCodes_t::PROTOCOL_VIOLATION,
+                                       "CRYPTO frame routed to a Stream (Protocol Violation)");
+      return -1;
       break;
 
     default:

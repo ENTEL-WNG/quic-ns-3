@@ -446,12 +446,6 @@ QuicL5Protocol::GetMaxPacketSize () const
   return m_socket->GetSegSize ();
 }
 
-bool
-QuicL5Protocol::ContainsTransportParameters ()
-{
-  return m_socket->CouldContainTransportParameters ();
-}
-
 void
 QuicL5Protocol::OnReceivedTransportParameters (
   QuicTransportParameters transportParameters)

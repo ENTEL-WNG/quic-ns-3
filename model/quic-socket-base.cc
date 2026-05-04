@@ -457,7 +457,6 @@ QuicSocketBase::QuicSocketBase (void)
     m_maxTrackedGaps (20),
     // Transport Parameters management
     m_receivedTransportParameters (false),
-    m_couldContainTransportParameters (true),
     // Timers and Events
     m_idleTimeoutEvent (),
     m_drainingPeriodEvent (),
@@ -542,7 +541,6 @@ QuicSocketBase::QuicSocketBase (const QuicSocketBase& sock)   // Copy constructo
     m_maxTrackedGaps (sock.m_maxTrackedGaps),
     // Transport Params Management
     m_receivedTransportParameters (sock.m_receivedTransportParameters),
-    m_couldContainTransportParameters (sock.m_couldContainTransportParameters),
     // Timers
     m_idleTimeoutEvent (),
     m_drainingPeriodEvent (),
@@ -856,32 +854,41 @@ QuicSocketBase::Connect (const Address & address)
       m_quicl5 = CreateStreamController ();
     }
 
+  // 1. Check if 0-RTT handshake flag is active (it bypasses the authenticated list and does 0-RTT always)
+  if (m_quicl4->Is0RTTHandshakeAllowed ())
+    {
+      NS_LOG_INFO ("Proceeding with 0-RTT Handshake: 0-RTT Handshake flag bypasses authenticated address check");
+      m_quicl4->UdpConnect (address, this);
+      return DoFastConnect ();
+    }
+  // 2. Extract IPv4/IPv6 address
+  Address ipAddressToCheck;
   if (InetSocketAddress::IsMatchingType (address))
     {
-      // check if the address is in a list of known and authenticated addresses
-      auto result = std::find (
-        m_quicl4->GetAuthAddresses ().begin (), m_quicl4->GetAuthAddresses ().end (),
-        InetSocketAddress::ConvertFrom (address).GetIpv4 ());
-
-      if (result != m_quicl4->GetAuthAddresses ().end ()
-          || m_quicl4->Is0RTTHandshakeAllowed ())
-        {
-          NS_LOG_INFO (
-            "CONNECTION AUTHENTICATED Client found the Server " << InetSocketAddress::ConvertFrom (address).GetIpv4 () << " port " << InetSocketAddress::ConvertFrom (address).GetPort () << " in authenticated list");
-          // connect the underlying UDP socket
-          m_quicl4->UdpConnect (address, this);
-          return DoFastConnect ();
-        }
+      ipAddressToCheck = InetSocketAddress::ConvertFrom (address).GetIpv4 ();
     }
-  
-  // For IPv6 or unauthenticated IPv4, proceed with normal handshake
-  NS_LOG_INFO (
-    "CONNECTION not authenticated: cannot perform 0-RTT Handshake");
+  else if (Inet6SocketAddress::IsMatchingType (address))
+    {
+      ipAddressToCheck = Inet6SocketAddress::ConvertFrom (address).GetIpv6 ();
+    }
+
+  // 3. Check for it in the authenticated addresses list
+  auto result = std::find (
+    m_quicl4->GetAuthAddresses ().begin (), m_quicl4->GetAuthAddresses ().end (),
+    ipAddressToCheck);
+
+  if (result != m_quicl4->GetAuthAddresses ().end ())
+    {
+      NS_LOG_INFO ("Proceeding with 0-RTT Handshake: Client found the Server in authenticated list");
+      m_quicl4->UdpConnect (address, this);
+      return DoFastConnect ();
+    }
+
+  // Otherwise, proceed with 1-RTT Handshake
+  NS_LOG_DEBUG ("CONNECTION not authenticated: cannot perform 0-RTT Handshake");
   // connect the underlying UDP socket
   m_quicl4->UdpConnect (address, this);
   return DoConnect ();
-
-
 }
 
 /* Inherit from Socket class: Invoked by upper-layer application */
@@ -1327,15 +1334,20 @@ QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool 
     }
   else // APPLICATION_DATA
     {
-      if (m_socketState == OPEN && !m_connected && m_quicl4->Is0RTTHandshakeAllowed ())
+      // Allow sending data with 0-RTT headers in CONNECTING_CLT (0-RTT sent, but awaiting confirmation)
+      if (m_socketState == CONNECTING_CLT && !m_connected && m_quicl4->Is0RTTHandshakeAllowed ())
         {
+          // Client sending early data uses 0-RTT header
           head = QuicHeader::Create0RTT (m_connectionId, m_vers, packetNumber);
-          // 0-RTT usually switches key phase? No, but let's keep old logic if valid
+        }
+      else if (m_socketState == OPEN || m_socketState == CONNECTING_SVR)
+        {
+          // Client in OPEN, or Server in OPEN/CONNECTING_SVR (0.5-RTT data) use SHORT header
+          head = QuicHeader::CreateShort (m_connectionId, packetNumber, true, m_keyPhase);
         }
       else
         {
-          head = QuicHeader::CreateShort (m_connectionId, packetNumber,
-                                          true, m_keyPhase);
+          NS_LOG_WARN ("Trying to send APPLICATION_DATA in an invalid state: " << QuicStateName[m_socketState]);
         }
     }
 
@@ -1943,7 +1955,6 @@ QuicSocketBase::SendInitialHandshake (uint8_t type,
     {
       NS_LOG_INFO ("Create VERSION_NEGOTIATION");
       m_receivedTransportParameters = false;
-      m_couldContainTransportParameters = true;
 
       std::vector<uint32_t> supportedVersions;
       supportedVersions.push_back (QUIC_VERSION);
@@ -2048,26 +2059,6 @@ QuicSocketBase::SendInitialHandshake (uint8_t type,
       m_congestionControl->CongestionStateSet (m_tcb,
                                               TcpSocketState::CA_OPEN);
     }
-  else if (type == QuicHeader::ZERO_RTT)
-    {
-    NS_LOG_INFO ("Create ZERO_RTT");
-    Ptr<Packet> p = Create<Packet> ();
-    QuicTransportParameters tp = OnSendingTransportParameters ();
-    Ptr<Packet> tpPkt = Create<Packet> ();
-    tpPkt->AddHeader (tp);
-    
-    QuicSubheader crypto = QuicSubheader::CreateCrypto (0, tpPkt->GetSize ());
-    p->AddHeader (crypto);
-    p->AddAtEnd (tpPkt);
-
-    // Set initial congestion window and Ssthresh
-    m_tcb->m_cWnd = m_tcb->m_initialCWnd;
-    m_tcb->m_ssThresh = m_tcb->m_initialSsThresh;
-
-    // RFC 9000: CRYPTO frames go directly to socket TX buffer, not through a stream
-    AppendingTx (p);
- 
-    }
   else
     {
       NS_LOG_INFO ("Wrong Handshake Type");
@@ -2098,15 +2089,6 @@ QuicSocketBase::OnReceivedFrame (Ptr<Packet> p, QuicSubheader &sub, PacketNumber
             QuicSubheader::TransportErrorCodes_t::CRYPTO_BUFFER_EXCEEDED,
             "Crypto buffer limit exceeded");
           return;
-        }
-
-      if (CouldContainTransportParameters ())
-        {
-          QuicTransportParameters transport;
-          if (p->GetSize () > 0 && p->RemoveHeader (transport) > 0)
-            {
-              OnReceivedTransportParameters (transport);
-            }
         }
     }
   else if (sub.GetFrameType () == QuicSubheader::CONNECTION_CLOSE)
@@ -2563,24 +2545,18 @@ int
 QuicSocketBase::DoFastConnect (void)
 {
   NS_LOG_FUNCTION (this);
-  NS_ABORT_MSG_IF (!IsVersionSupported (m_vers),
-                   "0RTT Handshake requested with wrong Initial Version");
+  NS_ABORT_MSG_IF (!IsVersionSupported (m_vers), "0RTT Handshake requested with wrong Initial Version");
 
-  if (m_socketState != IDLE)
-    {
-      //m_errno = ERROR_INVAL;
-      return -1;
-    }
+  if (m_socketState != IDLE) return -1;
 
-  else if (m_socketState == IDLE)
-    {
-      SetState (OPEN);
-      Simulator::ScheduleNow (&QuicSocketBase::ConnectionSucceeded, this);
-      m_congestionControl->CongestionStateSet (m_tcb,
-                                               TcpSocketState::CA_OPEN);
-      QuicHeader q;
-      SendInitialHandshake (QuicHeader::ZERO_RTT, q, 0);
-    }
+  // RFC 9000: Client must send INITIAL before 0-RTT
+  SetState (CONNECTING_CLT);
+  QuicHeader q;
+  SendInitialHandshake (QuicHeader::INITIAL, q, 0);
+
+  // Signal the application to start sending data (0-RTT headers will be used)
+  Simulator::ScheduleNow (&QuicSocketBase::ConnectionSucceeded, this);
+  m_congestionControl->CongestionStateSet (m_tcb, TcpSocketState::CA_OPEN);
   return 0;
 }
 
@@ -2619,21 +2595,20 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
 {
   NS_LOG_FUNCTION (this);
 
+  // Trace the incoming packet
   m_rxTrace (p, quicHeader, this);
 
   NS_LOG_INFO ("Received packet of size " << p->GetSize ());
 
-  // check if this packet is not received during the draining period
+  // Check if this packet is received during the draining period
   if (!m_drainingPeriodEvent.IsRunning ())
     {
-      m_idleTimeoutEvent.Cancel ();   // reset the IDLE timeout
-      NS_LOG_LOGIC (
-        this << " IdleTimeout canceled at " << Simulator::Now ().GetSeconds () << " New Close event to expire at time " << (Simulator::Now () + m_idleTimeout.Get ()).GetSeconds ());
-      m_idleTimeoutEvent = Simulator::Schedule (m_idleTimeout,
-                                                &QuicSocketBase::Close, this);
+      m_idleTimeoutEvent.Cancel ();   // Reset the IDLE timeout
+      m_idleTimeoutEvent = Simulator::Schedule (m_idleTimeout, &QuicSocketBase::Close, this);
     }
-  else   // If the socket is in Draining Period, discard the packets
+  else   // If the socket is in Draining Period, discard all incoming packets
     {
+      NS_LOG_WARN ("QUIC Socket in draining period, discarding packet");
       return;
     }
 
@@ -2641,58 +2616,92 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
   bool unsupportedVersion = false;
   PacketNumberSpace space = APPLICATION_DATA;
 
-  if (quicHeader.IsORTT () and m_socketState == LISTENING)
+  // 1. Handle 0-RTT packets (Early Data)
+  // RFC 9000: Servers must be able to process 0-RTT packets during or even before the handshake
+  if (quicHeader.IsORTT ())
     {
-      NS_LOG_INFO ("Server receives 0-RTT while in LISTENING state");
-      if (m_serverBusy)
+      if (m_socketState == LISTENING || m_socketState == CONNECTING_SVR || m_socketState == OPEN)
         {
-          AbortConnection (QuicSubheader::TransportErrorCodes_t::SERVER_BUSY,
-                           "Server too busy to accept new connections");
+          /* * TODO: Implement 0-RTT buffering for out-of-order packets and ACK waiting.
+           *
+           * RFC 9001 Requirement: 0-RTT data is encrypted with keys derived from 
+           * the Session Ticket. However, the server cannot identify the correct 
+           * keys until it processes the ClientHello contained in the INITIAL packet.
+           *
+           * Current simplified logic: We process 0-RTT immediately, since this
+           * implementation does not do actual encryption. We also send the 
+           * necessary ACKs immediately, which is premature. If 0-RTT arrives 
+           * BEFORE the INITIAL packet (common in reordered networks), a real 
+           * implementation would be unable to decrypt it and would need to buffer 
+           * the opaque packet until the INITIAL arrives to unlock the keys.
+           */
+          if (m_socketState == LISTENING || m_socketState == CONNECTING_SVR)
+            {
+              NS_LOG_INFO ("Server receives 0-RTT packet during handshake. Buffering early data.");
+
+              // Verify if the 0-RTT handshake is allowed by policy
+              if (!m_quicl4->Is0RTTHandshakeAllowed ())
+                {
+                  NS_LOG_WARN ("Server rejects 0-RTT packet: Feature is disabled");
+                  AbortConnection (QuicSubheader::TransportErrorCodes_t::PROTOCOL_VIOLATION,
+                                   "0-RTT Handshake not allowed by Server");
+                  return;
+                }
+
+              if (m_serverBusy)
+                {
+                  AbortConnection (QuicSubheader::TransportErrorCodes_t::SERVER_BUSY,
+                                   "Server too busy to accept new connections");
+                  return;
+                }
+              // We only buffer the data and wait for the INITIAL packet to formalize the connection.
+            }
+          else // m_socketState == OPEN
+            {
+              // Handle 0-RTT packets that arrive late due to network reordering
+              NS_LOG_INFO ("Received late 0-RTT packet while already in OPEN state");
+            }
+
+          space = APPLICATION_DATA;
+          isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
+          
+          if (m_socketState == IDLE || m_socketState == CLOSING) return;
+
+          // Track packet number for acknowledgement
+          m_pnSpaces[space].m_receivedPacketNumbers.push_back (quicHeader.GetPacketNumber ());
+          m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue (), 
+                                                         quicHeader.GetPacketNumber ().GetValue ());
+          m_pnSpaces[space].m_lastReceived = Simulator::Now ();
+        }
+      else
+        {
+          NS_LOG_DEBUG ("Dropping 0-RTT packet received in invalid state: " << QuicStateName[m_socketState]);
           return;
         }
-
-      m_couldContainTransportParameters = true;
-
-      PacketNumberSpace space = APPLICATION_DATA;
-      isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
-      if (m_socketState == IDLE || m_socketState == CLOSING)
-        {
-          return;
-        }
-      m_pnSpaces[space].m_receivedPacketNumbers.push_back (quicHeader.GetPacketNumber ());
-      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue (), quicHeader.GetPacketNumber ().GetValue ());
-      m_pnSpaces[space].m_lastReceived = Simulator::Now ();
-
-      m_connected = true;
-      m_keyPhase == QuicHeader::PHASE_ONE ? m_keyPhase =
-        QuicHeader::PHASE_ZERO :
-        m_keyPhase =
-          QuicHeader::PHASE_ONE;
-      SetState (OPEN);
-      Simulator::ScheduleNow (&QuicSocketBase::ConnectionSucceeded, this);
-      m_congestionControl->CongestionStateSet (m_tcb,
-                                               TcpSocketState::CA_OPEN);
-      m_couldContainTransportParameters = false;
-
     }
-  else if (quicHeader.IsInitial () and m_socketState == CONNECTING_SVR)
+
+  // 2. Handle INITIAL packets
+  else if (quicHeader.IsInitial () && (m_socketState == CONNECTING_SVR || m_socketState == LISTENING))
     {
-      NS_LOG_INFO ("Server receives INITIAL");
+      NS_LOG_INFO ("Server receives INITIAL packet");
+      
+      // If we were LISTENING (and maybe buffered 0-RTT data), now we officially move to CONNECTING_SVR
+      if (m_socketState == LISTENING)
+        {
+          SetState (CONNECTING_SVR);
+        }
+
       if (m_serverBusy)
         {
-          AbortConnection (QuicSubheader::TransportErrorCodes_t::SERVER_BUSY,
-                           "Server too busy to accept new connections");
+          AbortConnection (QuicSubheader::TransportErrorCodes_t::SERVER_BUSY, "Server busy");
           return;
         }
 
+      // Enforce minimum initial packet size (RFC 9000 anti-amplification)
       if (p->GetSize () < QuicSocketBase::MIN_INITIAL_PACKET_SIZE)
         {
-          std::stringstream error;
-          error << "Initial Packet smaller than "
-                << QuicSocketBase::MIN_INITIAL_PACKET_SIZE << " octects";
-          AbortConnection (
-            QuicSubheader::TransportErrorCodes_t::PROTOCOL_VIOLATION,
-            error.str ().c_str ());
+          NS_LOG_WARN ("Initial packet too small (" << p->GetSize() << " bytes)");
+          AbortConnection (QuicSubheader::TransportErrorCodes_t::PROTOCOL_VIOLATION, "Initial too small");
           return;
         }
 
@@ -2703,80 +2712,68 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
       isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
       if (isAckEliciting == 1) MaybeQueueAck (space);
 
-      if (m_socketState == IDLE || m_socketState == CLOSING)
-        {
-          return;
-        }
+      if (m_socketState == IDLE || m_socketState == CLOSING) return;
 
-      if (m_quicl4->IsServer ())
+      // Server responds with Handshake/Initial packets
+      SendInitialHandshake (QuicHeader::HANDSHAKE, quicHeader, p);
+    }
+
+  // 3. Handle HANDSHAKE packets (Handshake completion and key derivation)
+  else if (quicHeader.IsHandshake () && (m_socketState == CONNECTING_CLT || m_socketState == CONNECTING_SVR))
+    {
+      NS_LOG_INFO ("Receiving HANDSHAKE packet");
+      space = HANDSHAKE_DATA;
+      m_pnSpaces[space].m_receivedPacketNumbers.push_back (quicHeader.GetPacketNumber ());
+      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue (), 
+                                                     quicHeader.GetPacketNumber ().GetValue ());
+      m_pnSpaces[space].m_lastReceived = Simulator::Now ();
+      
+      isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
+      if (isAckEliciting == 1) MaybeQueueAck (space);
+
+      if (m_socketState == IDLE || m_socketState == CLOSING) return;
+
+      // RFC 9000: Handshake is confirmed. Move to OPEN state and enable SHORT headers for subsequent data.
+      SetState (OPEN);
+      m_connected = true; 
+      Simulator::ScheduleNow (&QuicSocketBase::ConnectionSucceeded, this);
+      m_congestionControl->CongestionStateSet (m_tcb, TcpSocketState::CA_OPEN);
+      
+      // Cleanup handshake resources
+      m_txBuffer->DiscardSpace (INITIAL_DATA);
+      m_pnSpaces[INITIAL_DATA].m_ackElicitingOutstanding = false;
+
+      if (m_socketState == CONNECTING_CLT) 
         {
-          m_couldContainTransportParameters = false;
+          // Clients might need to send a final Handshake packet or ACK
           SendInitialHandshake (QuicHeader::HANDSHAKE, quicHeader, p);
         }
-      else
+      else 
         {
-          NS_LOG_INFO (this << " WRONG VERSION " << quicHeader.GetVersion ());
-          unsupportedVersion = true;
-          SendInitialHandshake (QuicHeader::VERSION_NEGOTIATION, quicHeader,
-                                 p);
+          // Servers can now flush any data that was pending Handshake confirmation
+          SendPendingData (true);
         }
-      return;
     }
-  else if (quicHeader.IsHandshake () and m_socketState == CONNECTING_CLT)   // Undefined compiler behaviour if i try to receive transport parameters
-    {
-      NS_LOG_INFO ("Client receives HANDSHAKE");
 
-      space = HANDSHAKE_DATA;
+  // 4. Handle SHORT packets (Standard 1-RTT application data)
+  else if (quicHeader.IsShort () && m_socketState == OPEN)
+    {
+      NS_LOG_INFO ("Received SHORT packet while in OPEN state");
+      space = APPLICATION_DATA;
       m_pnSpaces[space].m_receivedPacketNumbers.push_back (quicHeader.GetPacketNumber ());
-      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue (), quicHeader.GetPacketNumber ().GetValue ());
+      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue (), 
+                                                     quicHeader.GetPacketNumber ().GetValue ());
       m_pnSpaces[space].m_lastReceived = Simulator::Now ();
+
       isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
-      if (isAckEliciting == 1) MaybeQueueAck (space);
-      if (m_socketState == IDLE || m_socketState == CLOSING)
-        {
-          return;
-        }
-
-      SetState (OPEN);
-      Simulator::ScheduleNow (&QuicSocketBase::ConnectionSucceeded, this);
-      m_congestionControl->CongestionStateSet (m_tcb,
-                                               TcpSocketState::CA_OPEN);
-      m_couldContainTransportParameters = false;
-      m_txBuffer->DiscardSpace (INITIAL_DATA);
-      m_pnSpaces[INITIAL_DATA].m_ackElicitingOutstanding = false;
-
-      SendInitialHandshake (QuicHeader::HANDSHAKE, quicHeader, p);
-      return;
     }
-  else if (quicHeader.IsHandshake () and m_socketState == CONNECTING_SVR)
+
+  // 5. Handle Version Negotiation (Client Side)
+  else if (quicHeader.IsVersionNegotiation () && m_socketState == CONNECTING_CLT)
     {
-      NS_LOG_INFO ("Server receives HANDSHAKE");
+      NS_LOG_INFO ("Client receives VERSION_NEGOTIATION packet");
 
-      space = HANDSHAKE_DATA;
-      m_pnSpaces[space].m_receivedPacketNumbers.push_back (quicHeader.GetPacketNumber ());
-      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue (), quicHeader.GetPacketNumber ().GetValue ());
-      m_pnSpaces[space].m_lastReceived = Simulator::Now ();
-      isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
-      if (isAckEliciting == 1) MaybeQueueAck (space);
-      if (m_socketState == IDLE || m_socketState == CLOSING)
-        {
-          return;
-        }
-
-      SetState (OPEN);
-      Simulator::ScheduleNow (&QuicSocketBase::ConnectionSucceeded, this);
-      m_congestionControl->CongestionStateSet (m_tcb,
-                                               TcpSocketState::CA_OPEN);
-      m_txBuffer->DiscardSpace (INITIAL_DATA);
-      m_pnSpaces[INITIAL_DATA].m_ackElicitingOutstanding = false;
-      SendPendingData (true);
-      return;
-    }
-  else if (quicHeader.IsVersionNegotiation ()
-           and m_socketState == CONNECTING_CLT)
-    {
-      NS_LOG_INFO ("Client receives VERSION_NEGOTIATION");
-
+      // Extract the list of versions supported by the server from the packet payload
       uint8_t *buffer = new uint8_t[p->GetSize ()];
       p->CopyData (buffer, p->GetSize ());
 
@@ -2786,73 +2783,77 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
           receivedVersions.push_back (
             buffer[i] + (buffer[i + 1] << 8) + (buffer[i + 2] << 16)
             + (buffer[i + 3] << 24));
-          //NS_LOG_INFO(" " << (uint64_t) buffer[i] << " " << (uint64_t)buffer[i+1] << " " << (uint64_t)buffer[i+2] << " " << (uint64_t)buffer[i+3] );
         }
+      delete[] buffer; // Clean up the temporary buffer
 
+      // Define versions supported by this client implementation
       std::vector<uint32_t> supportedVersions;
       supportedVersions.push_back (QUIC_VERSION);
       supportedVersions.push_back (QUIC_VERSION_NS3_IMPL);
 
+      // Try to find a version that both client and server support
       uint32_t foundVersion = 0;
-      for (uint8_t i = 0; i < receivedVersions.size (); i++)
+      for (uint32_t sVersion : supportedVersions)
         {
-          for (uint8_t j = 0; j < supportedVersions.size (); j++)
+          for (uint32_t rVersion : receivedVersions)
             {
-//			NS_LOG_INFO("rec " << receivedVersions[i] << " myvers " << m_supportedVersions[j] );
-              if (receivedVersions[i] == supportedVersions[j])
+              if (rVersion == sVersion)
                 {
-                  foundVersion = receivedVersions[i];
+                  foundVersion = rVersion;
+                  break;
                 }
             }
+          if (foundVersion != 0) break;
         }
 
       if (foundVersion != 0)
         {
-          NS_LOG_INFO ("A matching supported version is found " << foundVersion << " re-send initial");
-          m_vers = foundVersion;
-          SendInitialHandshake (QuicHeader::INITIAL, quicHeader, p);
+          NS_LOG_INFO ("A matching supported version is found: " << foundVersion << ". Re-sending INITIAL.");
+          m_vers = foundVersion; // Update to the negotiated version
+          
+          // Reset transport parameters status as we are restarting the handshake
+          m_receivedTransportParameters = false; 
+          
+          // Re-send the Initial Handshake with the new version
+          QuicHeader q;
+          SendInitialHandshake (QuicHeader::INITIAL, q, 0);
         }
       else
         {
+          // RFC 9000: If no common version is found, the connection must be aborted
+          NS_LOG_ERROR ("No supported version found among server's offered versions.");
           AbortConnection (
             QuicSubheader::TransportErrorCodes_t::VERSION_NEGOTIATION_ERROR,
             "No supported Version found by the Client");
           return;
         }
-      return;
+      return; 
     }
-  else if (quicHeader.IsShort () and m_socketState == OPEN)
-    {
-      NS_LOG_INFO ("Received 0-RTT while in OPEN state");
-      space = APPLICATION_DATA;
-      m_pnSpaces[space].m_receivedPacketNumbers.push_back (quicHeader.GetPacketNumber ());
-      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue (), quicHeader.GetPacketNumber ().GetValue ());
-      m_pnSpaces[space].m_lastReceived = Simulator::Now ();
-      isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
-    }
+
+  // 6. Final State Checks (Closing and Errors)
   else if (m_socketState == CLOSING)
     {
-      AbortConnection (m_transportErrorCode,
-                       "Received packet in Closing state");
+      NS_LOG_INFO ("Packet received during CLOSING state, aborting connection");
+      AbortConnection (m_transportErrorCode, "Received packet in Closing state");
     }
   else
     {
+      NS_LOG_DEBUG ("Dropping unexpected packet type " << (uint32_t)quicHeader.GetTypeByte() 
+                    << " in current state " << QuicStateName[m_socketState]);
       return;
     }
 
-  // Trigger ACK handling only for ack-eliciting packets
-  // isAckEliciting: true (1) means packet IS ack-eliciting, false (0) means NOT ack-eliciting
-  NS_LOG_DEBUG ("isAckEliciting " << isAckEliciting << " unsupportedVersion " << unsupportedVersion);
+  // 7. Trigger Acknowledgment for all ack-eliciting packets
+  // Note: Initial and Handshake packets are acked inside their specific blocks.
   if (isAckEliciting == 1 && !unsupportedVersion)
     {
-      NS_LOG_DEBUG ("Received ack-eliciting packet, call MaybeQueueAck");
+      NS_LOG_DEBUG ("Packet is ack-eliciting, scheduling ACK in space " << space);
       MaybeQueueAck (space);
     }
   else if (isAckEliciting == 0)
     {
-      NS_LOG_INFO ("Received non-ack-eliciting packet (ACK-only), no ACK needed");
+      NS_LOG_INFO ("Received non-ack-eliciting packet (ACK-only), no further action needed");
     }
-
 }
 
 uint32_t
@@ -3097,12 +3098,6 @@ uint32_t
 QuicSocketBase::GetMaxStreamIdUnidirectional () const
 {
   return m_initial_max_stream_id_uni;
-}
-
-bool
-QuicSocketBase::CouldContainTransportParameters () const
-{
-  return m_couldContainTransportParameters;
 }
 
 void
