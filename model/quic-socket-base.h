@@ -130,8 +130,6 @@ public:
   Time m_nextAlarmTrigger;                      //<! Time of the next alarm
 
   // Congestion Control constants of interests (RFC 9002 Appendix B.2)
-  uint32_t m_kInitialWindow;      //!< Intial value in bytes for the congestion window.
-  uint32_t m_kMinimumWindow;      //!< Default minimum congestion window.
   uint32_t m_kInitialWindowMultiplier; //!< Multiplier for initial window calculation (default 10)
   uint32_t m_kMinimumWindowMultiplier; //!< Multiplier for minimum window calculation (default 2)
   double m_kLossReductionFactor;  //!< Reduction in congestion window when a new loss event is detected.
@@ -172,6 +170,18 @@ public:
    * \return the initial RTT
    */
   Time GetInitialRtt (void) const;
+
+  /**
+   * \brief Returns the Minimum Congestion Window to be used
+   * \return the minimum CWND value
+   */
+  uint32_t GetMinimumWindow () const;
+
+  /**
+   * \brief Returns the Initial Congestion Window to be used
+   * \return the initial CWND value
+   */
+  uint32_t GetInitialWindow () const;
 
   // Congestion Control variables of interests (RFC 9002 Appendix B.1)
   SequenceNumber32 m_endOfRecovery;  /**< The largest packet number sent when QUIC detects a loss. When a larger packet

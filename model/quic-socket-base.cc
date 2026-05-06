@@ -26,6 +26,7 @@
  #define NS_LOG_APPEND_CONTEXT \
   if (m_node and m_connectionId) { std::clog << " [node " << m_node->GetId () << " socket " << m_connectionId << "] "; }
 */
+#include <cstdint>
 #include <math.h>
 #include <algorithm>
 #include <vector>
@@ -318,8 +319,6 @@ QuicSocketState::QuicSocketState ()
     m_lossTime (Seconds (0)),
     m_alarmType (0),
     m_nextAlarmTrigger (Seconds (100)),
-    m_kInitialWindow (0),
-    m_kMinimumWindow (0),
     m_kInitialWindowMultiplier (10),
     m_kMinimumWindowMultiplier (2),
     m_kLossReductionFactor (0.5),
@@ -334,10 +333,9 @@ QuicSocketState::QuicSocketState ()
 
   // m_minRtt is inherited from TcpSocketState
   m_minRtt = Time::Max ();
-
-  // Initialize window based on segment size (inherited from TcpSocketState)
-  m_kMinimumWindow = m_kMinimumWindowMultiplier * m_segmentSize;
-  m_initialCWnd = std::min (m_kInitialWindowMultiplier * m_segmentSize, std::max (2 * m_segmentSize, 14720U));
+  m_cWnd = GetInitialWindow();
+  m_ssThresh = m_initialSsThresh;
+  m_pacingRate = m_maxPacingRate;
 }
 
 QuicSocketState::QuicSocketState (const QuicSocketState &other)
@@ -360,8 +358,6 @@ QuicSocketState::QuicSocketState (const QuicSocketState &other)
     m_lossTime (other.m_lossTime),
     m_alarmType (other.m_alarmType),
     m_nextAlarmTrigger (other.m_nextAlarmTrigger),
-    m_kInitialWindow (other.m_kInitialWindow),
-    m_kMinimumWindow (other.m_kMinimumWindow),
     m_kInitialWindowMultiplier (other.m_kInitialWindowMultiplier),
     m_kMinimumWindowMultiplier (other.m_kMinimumWindowMultiplier),
     m_kLossReductionFactor (other.m_kLossReductionFactor),
@@ -373,16 +369,18 @@ QuicSocketState::QuicSocketState (const QuicSocketState &other)
     m_priorInFlight (other.m_priorInFlight)
 {
   m_lossDetectionAlarm.Cancel ();
+  m_cWnd = GetInitialWindow();
+  m_ssThresh = m_initialSsThresh;
+  m_pacingRate = m_maxPacingRate;
 }
 
 void
 QuicSocketState::SetInitialWindowMultiplier (uint32_t multiplier)
 {
   m_kInitialWindowMultiplier = multiplier;
-  m_initialCWnd = std::min (m_kInitialWindowMultiplier * m_segmentSize, std::max (m_kMinimumWindowMultiplier * m_segmentSize, 14720U));
   if (m_delivered == 0)
     {
-      m_cWnd = m_initialCWnd;
+      m_cWnd = GetInitialWindow ();
     }
 }
 
@@ -390,7 +388,6 @@ void
 QuicSocketState::SetMinimumWindowMultiplier (uint32_t multiplier)
 {
   m_kMinimumWindowMultiplier = multiplier;
-  m_kMinimumWindow = m_kMinimumWindowMultiplier * m_segmentSize;
 }
 
 uint32_t
@@ -417,6 +414,29 @@ Time
 QuicSocketState::GetInitialRtt (void) const
 {
   return m_kInitialRtt;
+}
+
+uint32_t
+QuicSocketState::GetMinimumWindow () const
+{
+  return m_kMinimumWindowMultiplier * m_segmentSize;
+}
+
+uint32_t
+QuicSocketState::GetInitialWindow () const
+{
+  if (m_kInitialWindowMultiplier <= 10)
+    {
+      // RFC 9002 formula
+      return std::min (m_kInitialWindowMultiplier * m_segmentSize, 
+                       std::max (GetMinimumWindow (), 14720U));
+    }
+  else
+    {
+      uint32_t initialCwnd = m_kInitialWindowMultiplier * m_segmentSize;
+      NS_LOG_WARN("Using experimental Initial CWND value " << initialCwnd << "B");
+      return initialCwnd;
+    }
 }
 
 QuicSocketBase::QuicSocketBase (void)
@@ -485,11 +505,8 @@ QuicSocketBase::QuicSocketBase (void)
     }
 
   m_tcb->m_max_ack_delay = m_max_ack_delay;
-  m_tcb->m_cWnd = m_tcb->m_initialCWnd;
-  m_tcb->m_ssThresh = m_tcb->m_initialSsThresh;
   m_txBuffer->SetQuicSocketState (m_tcb);
 
-  m_tcb->m_pacingRate = m_tcb->m_maxPacingRate;
   m_pacingTimer.SetFunction (&QuicSocketBase::NotifyPacingPerformed, this);
 
   if (!m_quicCongestionControlLegacy)
@@ -560,8 +577,6 @@ QuicSocketBase::QuicSocketBase (const QuicSocketBase& sock)   // Copy constructo
 
   m_txBuffer = CopyObject (sock.m_txBuffer);
   m_rxBuffer = CopyObject (sock.m_rxBuffer);
-  m_tcb->m_cWnd = m_tcb->m_initialCWnd;
-  m_tcb->m_ssThresh = m_tcb->m_initialSsThresh;
   
   if (sock.m_congestionControl)
     {
@@ -573,7 +588,6 @@ QuicSocketBase::QuicSocketBase (const QuicSocketBase& sock)   // Copy constructo
     }
   
   m_txBuffer->SetQuicSocketState (m_tcb);
-  m_tcb->m_pacingRate = m_tcb->m_maxPacingRate;
   m_pacingTimer.SetFunction (&QuicSocketBase::NotifyPacingPerformed, this);
 
   if (!m_quicCongestionControlLegacy)
@@ -1056,12 +1070,9 @@ QuicSocketBase::SetSegSize (uint32_t size)
                        "Cannot change segment size dynamically.");
 
   m_tcb->m_segmentSize = size;
-  // Update minimum congestion window
-  m_tcb->m_initialCWnd = std::min (m_tcb->m_kInitialWindowMultiplier * size, std::max (m_tcb->m_kMinimumWindowMultiplier * size, 14720U));
-  m_tcb->m_kMinimumWindow = m_tcb->m_kMinimumWindowMultiplier * size;
   if (m_socketState == IDLE)
     {
-      m_tcb->m_cWnd = m_tcb->m_initialCWnd;
+      m_tcb->m_cWnd = m_tcb->GetInitialWindow ();
     }
 }
 
@@ -1921,7 +1932,7 @@ QuicSocketBase::SendInitialHandshake (uint8_t type,
         supportedVersions);
 
       // Set initial congestion window and Ssthresh
-      m_tcb->m_cWnd = m_tcb->m_initialCWnd;
+      m_tcb->m_cWnd = m_tcb->GetInitialWindow();
       m_tcb->m_ssThresh = m_tcb->m_initialSsThresh;
 
       m_quicl4->SendPacket (this, p, head);
@@ -1932,7 +1943,7 @@ QuicSocketBase::SendInitialHandshake (uint8_t type,
   else if (type == QuicHeader::INITIAL)
     {
       // Set initial congestion window and Ssthresh
-      m_tcb->m_cWnd = m_tcb->m_initialCWnd;
+      m_tcb->m_cWnd = m_tcb->GetInitialWindow();
       m_tcb->m_ssThresh = m_tcb->m_initialSsThresh;
 
       NS_LOG_INFO ("Create INITIAL");

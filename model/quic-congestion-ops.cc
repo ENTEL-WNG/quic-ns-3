@@ -262,7 +262,7 @@ QuicCongestionOps::OnPacketAckedCC (Ptr<TcpSocketState> tcb,
       if (tcbd->m_cWnd > (uint32_t) 0) {
           tcbd->m_cWnd += tcbd->m_segmentSize * ackedBytes / tcbd->m_cWnd;
       } else {
-          tcbd->m_cWnd = tcbd->m_kMinimumWindow;
+          tcbd->m_cWnd = tcbd->GetMinimumWindow();
       }
     }
 }
@@ -291,7 +291,7 @@ QuicCongestionOps::OnPacketsLost (
 
       uint32_t reducedCWnd = static_cast<uint32_t>(
         static_cast<double>(tcbd->m_cWnd.Get()) * tcbd->m_kLossReductionFactor);
-      tcbd->m_cWnd = std::max(reducedCWnd, (uint32_t)tcbd->m_kMinimumWindow);
+      tcbd->m_cWnd = std::max(reducedCWnd, tcbd->GetMinimumWindow());
       tcbd->m_ssThresh = tcbd->m_cWnd;
       
       // Track first lost packet time for persistent congestion
@@ -304,7 +304,7 @@ QuicCongestionOps::OnPacketsLost (
       if (congestionPeriod > persistentThreshold)
         {
           NS_LOG_INFO ("Persistent Congestion detected. Resetting window.");
-          tcbd->m_cWnd = tcbd->m_kMinimumWindow;
+          tcbd->m_cWnd = tcbd->GetMinimumWindow();
           tcbd->m_ssThresh = tcbd->m_cWnd; 
         }
     }

@@ -47,7 +47,7 @@ QuicCongestionOpsTestCase::DoRun (void)
   tcb->m_segmentSize = 1200;
   tcb->m_cWnd = 12000; // Initial window
   tcb->m_ssThresh = UINT32_MAX; 
-  tcb->m_kMinimumWindow = 2 * tcb->m_segmentSize;
+  tcb->m_kMinimumWindowMultiplier = 2;
   tcb->m_kLossReductionFactor = 0.5;
 
   // 1. Test Slow Start
@@ -145,8 +145,8 @@ QuicCongestionOpsTestCase::DoRun (void)
   cc->OnPacketsLost (tcb, pcPackets);
   
   // Expect window reset to minimum
-  NS_TEST_ASSERT_MSG_EQ (tcb->m_cWnd, tcb->m_kMinimumWindow, "Persistent congestion did not reset cwnd");
-  NS_TEST_ASSERT_MSG_EQ (tcb->m_ssThresh, tcb->m_kMinimumWindow, "Persistent congestion did not reset ssthresh");
+  NS_TEST_ASSERT_MSG_EQ (tcb->m_cWnd, tcb->GetMinimumWindow (), "Persistent congestion did not reset cwnd");
+  NS_TEST_ASSERT_MSG_EQ (tcb->m_ssThresh, tcb->GetMinimumWindow (), "Persistent congestion did not reset ssthresh");
 
 }
 
