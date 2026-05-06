@@ -26,6 +26,10 @@
  #define NS_LOG_APPEND_CONTEXT \
   if (m_node and m_connectionId) { std::clog << " [node " << m_node->GetId () << " socket " << m_connectionId << "] "; }
 */
+#include <math.h>
+#include <algorithm>
+#include <vector>
+#include <sstream>
 
 #include "ns3/abort.h"
 #include "ns3/node.h"
@@ -63,11 +67,8 @@
 #include "ns3/tcp-option-sack.h"
 #include "ns3/rtt-estimator.h"
 #include "quic-socket-tx-edf-scheduler.h"
+#include "quic-socket.h"
 #include "quic-stream-base.h"
-#include <math.h>
-#include <algorithm>
-#include <vector>
-#include <sstream>
 #include <ns3/core-module.h>
 
 namespace ns3 {
@@ -438,7 +439,6 @@ QuicSocketBase::QuicSocketBase (void)
     m_handshakeConfirmed (false),
     m_socketState (IDLE),
     m_transportErrorCode (QuicSubheader::TransportErrorCodes_t::NO_ERROR),
-    m_serverBusy (false),
     m_errno (ERROR_NOTERROR),
     m_connected (false),
     m_connectionId (0),
@@ -522,7 +522,6 @@ QuicSocketBase::QuicSocketBase (const QuicSocketBase& sock)   // Copy constructo
     m_handshakeConfirmed (sock.m_handshakeConfirmed),
     m_socketState (LISTENING),
     m_transportErrorCode (sock.m_transportErrorCode),
-    m_serverBusy (sock.m_serverBusy),
     m_errno (sock.m_errno),
     m_connected (sock.m_connected),
     m_connectionId (0),
@@ -1028,7 +1027,7 @@ QuicSocketBase::SendPendingData (bool withAck)
       uint32_t win = AvailableWindow ();
       if (win == 0) 
         {
-          NS_LOG_INFO ("Skipping Packet due to zero window");
+          NS_LOG_DEBUG ("Skipping Packet due to zero window");
           break;
         }
 
@@ -1073,7 +1072,7 @@ QuicSocketBase::GetSegSize (void) const
 }
 
 void
-QuicSocketBase::MaybeQueueAck (PacketNumberSpace space)
+QuicSocketBase::MaybeQueueAck (PacketNumberSpace space, bool isOutOfOrder)
 {
   NS_LOG_FUNCTION (this << space);
   QuicPacketNumberSpace &pnSpace = m_pnSpaces[space];
@@ -1088,79 +1087,52 @@ QuicSocketBase::MaybeQueueAck (PacketNumberSpace space)
       return;
     }
 
-  if (pnSpace.m_numPacketsReceivedSinceLastAckSent > m_tcb->m_kMaxPacketsReceivedBeforeAckSend)
+    // ACK already scheduled
+    if (pnSpace.m_sendAckEvent.IsRunning ())
     {
-    NS_LOG_INFO ("immediately schedule ACK - threshold reached");
-    pnSpace.m_queue_ack = true;
-    if (!pnSpace.m_sendAckEvent.IsRunning ())
-      {
-        // Use ScheduleNow to break the function call stack
-        pnSpace.m_sendAckEvent = Simulator::ScheduleNow(static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
-      }
+      return;
     }
 
-  if (HasReceivedMissing ())  // immediately queue the ACK
-    {
-      NS_LOG_INFO ("immediately send ACK - some packets have been received out of order");
-      pnSpace.m_queue_ack = true;
-      if (!pnSpace.m_sendAckEvent.IsRunning ())
-        {
-          pnSpace.m_sendAckEvent = Simulator::Schedule (TimeStep (1), static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
-        }
-    }
-  if (space == INITIAL_DATA || space == HANDSHAKE_DATA)
+if (space == INITIAL_DATA || space == HANDSHAKE_DATA)
     {
       NS_LOG_INFO ("immediately send ACK - Initial/Handshake MUST NOT be delayed");
       pnSpace.m_queue_ack = true;
-      if (!pnSpace.m_sendAckEvent.IsRunning ())
-        {
-          pnSpace.m_sendAckEvent = Simulator::ScheduleNow(static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
-        }
+      pnSpace.m_sendAckEvent = Simulator::ScheduleNow(static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
     }
-
-  if (!pnSpace.m_queue_ack)
+  else if (isOutOfOrder)
     {
-      if (pnSpace.m_numPacketsReceivedSinceLastAckSent >= m_tcb->m_kMaxPacketsReceivedBeforeAckSend)
+      NS_LOG_INFO ("immediately send ACK - packet creates or fills a gap");
+      pnSpace.m_queue_ack = true;
+      pnSpace.m_sendAckEvent = Simulator::Schedule (TimeStep (1), static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
+    }
+  else if (pnSpace.m_numPacketsReceivedSinceLastAckSent >= m_tcb->m_kMaxPacketsReceivedBeforeAckSend)
+    {
+      NS_LOG_INFO ("immediately schedule ACK - threshold reached");
+      pnSpace.m_queue_ack = true;
+      pnSpace.m_sendAckEvent = Simulator::ScheduleNow(static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
+    }
+  else
+    {
+      // If non applies, configure delayed ACK
+      pnSpace.m_queue_ack = false;
+      if (!pnSpace.m_delAckEvent.IsRunning ())
         {
-          NS_LOG_INFO ("immediately send ACK - more than 2 packets received");
-          pnSpace.m_queue_ack = true;
-          if (!pnSpace.m_sendAckEvent.IsRunning ())
-            {
-              pnSpace.m_sendAckEvent = Simulator::Schedule (TimeStep (1), static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
-            }
-        }
-      else
-        {
-          if (!pnSpace.m_delAckEvent.IsRunning ())
-            {
-              NS_LOG_INFO ("Schedule a delayed ACK for space " << space);
-              pnSpace.m_delAckEvent = Simulator::Schedule (
-                m_tcb->m_max_ack_delay, static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
-            }
+          NS_LOG_INFO ("Schedule a delayed ACK for space " << space);
+          pnSpace.m_delAckEvent = Simulator::Schedule (m_tcb->m_max_ack_delay, static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
         }
     }
 }
 
 bool
-QuicSocketBase::HasReceivedMissing ()
+QuicSocketBase::IsOutOfOrder (PacketNumberSpace space, SequenceNumber32 packetNumber)
 {
-  if (!m_quicl5)
+  NS_LOG_FUNCTION (this << space << packetNumber);
+  if (!m_pnSpaces[space].m_receivedPacketNumbers.empty())
     {
-      return false;
-    }
-
-  for (auto const& stream : m_quicl5->GetStreams ())
-    {
-      if (stream->GetRxBuffer()->Size () > 0 &&
-          stream->GetRxBuffer()->GetDeliverable (stream->GetRecvSize()).second == 0)
+      SequenceNumber32 prevLargest = m_pnSpaces[space].m_largestReceived;
+      if (packetNumber != prevLargest + 1)
         {
-          // There is data in the buffer, but none of it is contiguous with the
-          // currently expected receive offset (m_recvSize) for this stream.
-          // This indicates a missing segment in the stream.
-          NS_LOG_DEBUG ("Found missing data in stream " << stream->GetStreamId()
-                                     << ": expected offset " << stream->GetRecvSize()
-                                     << ", but next deliverable is 0, with "
-                                     << stream->GetRxBuffer()->Size() << " bytes buffered.");
+          NS_LOG_INFO("Packet number " << packetNumber << " is out of order for space " << space << ". Last number " << prevLargest);
           return true;
         }
     }
@@ -1213,7 +1185,8 @@ QuicSocketBase::SendAck (PacketNumberSpace space)
   uint32_t finalSize = p->GetSize () + head.GetSerializedSize ();
   m_txBuffer->UpdateAckSent (packetNumber, finalSize, space);
 
-  NS_LOG_INFO ("Send ACK packet in space " << space << " with header " << head);
+  NS_LOG_INFO("QUIC SendAck --> Sent Pkt nº" << packetNumber.GetValue() 
+                << " on space " << space << "(Size: " << finalSize << " bytes)");
   m_quicl4->SendPacket (this, p, head);
   m_txTrace (p, head, this);
 }
@@ -1221,179 +1194,144 @@ QuicSocketBase::SendAck (PacketNumberSpace space)
 uint32_t
 QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool withAck)
 {
-  SequenceNumber32 packetNumber = m_pnSpaces[space].m_nextTxSequence++;
-  NS_LOG_FUNCTION (this << space << packetNumber << maxSize << withAck);
-
-  if (!m_drainingPeriodEvent.IsRunning ())
-    {
-      m_idleTimeoutEvent.Cancel ();
-      NS_LOG_LOGIC (
-        this << " IdleTimeout canceled at " << Simulator::Now ().GetSeconds () << " New Close event to expire at time " << (Simulator::Now () + m_idleTimeout.Get ()).GetSeconds ());
-      m_idleTimeoutEvent = Simulator::Schedule (m_idleTimeout,
-                                                &QuicSocketBase::Close, this);
-    }
-  else
+  if (m_drainingPeriodEvent.IsRunning ())
     {
       NS_LOG_INFO ("Draining period event running");
       return -1;
     }
 
-  Ptr<Packet> p;
+  // Update the Idle Timeout
+  m_idleTimeoutEvent.Cancel ();
+  m_idleTimeoutEvent = Simulator::Schedule (m_idleTimeout, &QuicSocketBase::Close, this);
 
+  // 1. GET THE PACKET NUMBER (DO NOT INCREMENT YET)
+  SequenceNumber32 packetNumber = m_pnSpaces[space].m_nextTxSequence;
+  NS_LOG_FUNCTION (this << space << packetNumber << maxSize << withAck);
+
+  // 2. PREPARE HEADERS AND CALCULATE OVERHEAD
+  QuicHeader head;
+  if (space == INITIAL_DATA)
+    head = QuicHeader::CreateInitial (m_connectionId, m_vers, packetNumber);
+  else if (space == HANDSHAKE_DATA)
+    head = QuicHeader::CreateHandshake (m_connectionId, m_vers, packetNumber);
+  else
+    {
+      if (m_socketState == CONNECTING_CLT && !m_connected && m_quicl4->Is0RTTHandshakeAllowed ())
+        head = QuicHeader::Create0RTT (m_connectionId, m_vers, packetNumber);
+      else if (m_socketState == OPEN || m_socketState == CONNECTING_SVR)
+        head = QuicHeader::CreateShort (m_connectionId, packetNumber, true, m_keyPhase);
+      else
+        NS_LOG_WARN ("Trying to send APPLICATION_DATA in an invalid state: " << QuicStateName[m_socketState]);
+    }
+
+  uint32_t headerOverhead = head.GetSerializedSize ();
+  
+  Ptr<Packet> ackFrame = nullptr;
+  uint32_t ackOverhead = 0;
+  if (withAck && !m_pnSpaces[space].m_receivedPacketNumbers.empty ())
+    {
+      ackFrame = OnSendingAckFrame (space);
+      ackOverhead = ackFrame->GetSize ();
+    }
+
+  // 3. CALCULATE THE ACTUAL SPACE AVAILABLE FOR PAYLOAD
+  uint32_t totalOverhead = headerOverhead + ackOverhead;
+  uint32_t payloadMaxSize = (maxSize > totalOverhead) ? (maxSize - totalOverhead) : 0;
+
+  // 4. EXTRACT APPLICATION DATA
+  Ptr<Packet> p;
   if (m_txBuffer->GetNumCryptoFramesInBuffer (space) > 0)
     {
-      // Try to get crypto for this space first
       p = m_txBuffer->NextCryptoSequence (packetNumber, space);
       if (!p && space == APPLICATION_DATA) 
-        {
-          // If app data space requested but more crypto is available (probably in handshake),
-          // we should probably not reach here if SendPendingData is correct, 
-          // but let's be safe.
-          p = m_txBuffer->NextSequence (maxSize, packetNumber, space);
-        }
-      else if (!p)
-        {
-          // No crypto for this specific space?
-          return 0; 
-        }
+        p = m_txBuffer->NextSequence (payloadMaxSize, packetNumber, space);
     }
   else
     {
-      NS_LOG_LOGIC (
-        this << " SendDataPacket - sending packet " << packetNumber.GetValue () << " of size " << maxSize << " at time " << Simulator::Now ().GetSeconds ());
-      m_idleTimeoutEvent = Simulator::Schedule (m_idleTimeout,
-                                                &QuicSocketBase::Close, this);
-      p = m_txBuffer->NextSequence (maxSize, packetNumber, space);
+      p = m_txBuffer->NextSequence (payloadMaxSize, packetNumber, space);
+    }
+
+  // 5. ABORT CHECKS (GUARDS)
+  if (!p)
+    {
+      return 0; // Abort before consuming the packet number
     }
 
   uint32_t sz = p->GetSize ();
-  // If payload is 0 and it's not an ACK-only packet, DO NOT SEND.
-  // This prevents the "size 0" deadlock.
+  
   if (sz == 0 && !withAck && space == APPLICATION_DATA)
     {
       NS_LOG_INFO ("Skipping empty packet (payload 0, no ACK)");
-      return 0;
+      return 0; // Abort before consuming the packet number
     }
+  // We confirmed we will send a packet, increment 
+  m_pnSpaces[space].m_nextTxSequence++;
 
-  // check whether the connection is appLimited, i.e. not enough data to fill a packet
-  if (sz < maxSize and m_txBuffer->AppSize () == 0 and m_tcb->m_bytesInFlight.Get () < m_tcb->m_cWnd)
+  // 6. CONGESTION CONTROL AND PACING MANAGEMENT
+  if (sz < payloadMaxSize && m_txBuffer->AppSize () == 0 && m_tcb->m_bytesInFlight.Get () < m_tcb->m_cWnd)
     {
-      NS_LOG_LOGIC ("Connection is Application-Limited. sz = " << sz << " < maxSize = " << maxSize);
+      NS_LOG_LOGIC ("Connection is Application-Limited. sz = " << sz << " < maxSize = " << payloadMaxSize);
       m_tcb->m_appLimitedUntil = m_tcb->m_delivered + m_tcb->m_bytesInFlight.Get () ? : 1U;
     }
 
-  // perform pacing
   if (m_tcb->m_pacing)
     {
-      NS_LOG_DEBUG ("Pacing is enabled");
       if (m_pacingTimer.IsExpired ())
         {
-          NS_LOG_DEBUG ("Current Pacing Rate " << m_tcb->m_pacingRate);
           Time pacingDelay = Seconds (0);
           if (m_tcb->m_pacingRate.Get ().GetBitRate () > 0)
             {
               pacingDelay = m_tcb->m_pacingRate.Get ().CalculateBytesTxTime (sz);
-              NS_LOG_DEBUG ("Pacing Timer is in expired state, activate it. Expires in " << pacingDelay);
               m_pacingTimer.Schedule (pacingDelay);
             }
-          else
-            {
-               NS_LOG_WARN ("Pacing rate is 0, skipping timer schedule");
-            }
-        }
-      else
-        {
-          NS_LOG_INFO ("Pacing Timer is already in running state");
         }
     }
 
   bool isAckOnly = ((sz == 0) && (withAck));
 
-  if (withAck && !m_pnSpaces[space].m_receivedPacketNumbers.empty ())
+  // 7. FINAL ENCAPSULATION (APPEND ACK AND PADDING)
+  if (ackFrame)
     {
       p = p->Copy ();
-      p->AddAtEnd (OnSendingAckFrame (space));
+      p->AddAtEnd (ackFrame);
     }
 
-
-  QuicHeader head;
-  if (space == INITIAL_DATA)
+  if (space == INITIAL_DATA && (p->GetSize () + head.GetSerializedSize () < MIN_INITIAL_PACKET_SIZE))
     {
-      head = QuicHeader::CreateInitial (m_connectionId, m_vers, packetNumber);
-      // RFC 9000: Initial packets MUST be padded to 1200 bytes if they are the first ones
-      // Simplification: always pad initial packets if they are small
-      if (p->GetSize () + head.GetSerializedSize () < MIN_INITIAL_PACKET_SIZE)
-        {
-          uint32_t padding = MIN_INITIAL_PACKET_SIZE - (p->GetSize () + head.GetSerializedSize ());
-          p->AddAtEnd (Create<Packet> (padding));
-        }
-    }
-  else if (space == HANDSHAKE_DATA)
-    {
-      head = QuicHeader::CreateHandshake (m_connectionId, m_vers, packetNumber);
-    }
-  else // APPLICATION_DATA
-    {
-      // Allow sending data with 0-RTT headers in CONNECTING_CLT (0-RTT sent, but awaiting confirmation)
-      if (m_socketState == CONNECTING_CLT && !m_connected && m_quicl4->Is0RTTHandshakeAllowed ())
-        {
-          // Client sending early data uses 0-RTT header
-          head = QuicHeader::Create0RTT (m_connectionId, m_vers, packetNumber);
-        }
-      else if (m_socketState == OPEN || m_socketState == CONNECTING_SVR)
-        {
-          // Client in OPEN, or Server in OPEN/CONNECTING_SVR (0.5-RTT data) use SHORT header
-          head = QuicHeader::CreateShort (m_connectionId, packetNumber, true, m_keyPhase);
-        }
-      else
-        {
-          NS_LOG_WARN ("Trying to send APPLICATION_DATA in an invalid state: " << QuicStateName[m_socketState]);
-        }
+      uint32_t padding = MIN_INITIAL_PACKET_SIZE - (p->GetSize () + head.GetSerializedSize ());
+      p->AddAtEnd (Create<Packet> (padding));
     }
 
-  // Add padding to the packet to match segment size if app-limited
   uint32_t finalSize = p->GetSize () + head.GetSerializedSize ();
-  // if (!isAckOnly && finalSize < GetSegSize () && m_txBuffer->AppSize () == 0)
-  //   {
-  //     uint32_t paddingSize = GetSegSize () - finalSize;
-  //     p->AddAtEnd (Create<Packet> (paddingSize));
-  //     finalSize += paddingSize;
-  //     NS_LOG_DEBUG ("Padded packet " << packetNumber << " by " << paddingSize << " bytes. Final size: " << finalSize);
-  //   }
 
-  NS_LOG_INFO ("SendDataPacket of space " << space << " and size " << p->GetSize ());
+  // 8. TRANSMISSION AND TRACING
   m_quicl4->SendPacket (this, p, head);
   m_txTrace (p, head, this);
   NotifyDataSent (sz);
 
   if (isAckOnly)
-    {
-      m_txBuffer->UpdateAckSent (packetNumber, finalSize, space);
-    }
+    m_txBuffer->UpdateAckSent (packetNumber, finalSize, space);
   else
-    {
-      m_txBuffer->UpdatePacketSent (packetNumber, finalSize, space);
-    }
+    m_txBuffer->UpdatePacketSent (packetNumber, finalSize, space);
 
   BytesInFlight ();
-  // Update TCB trace for compatibility (though it might be confusing with 3 spaces)
   m_nextTxSequenceTrace (0, packetNumber.GetValue ());
 
   if (!m_quicCongestionControlLegacy)
     {
       Ptr<QuicCongestionOps> qcc = DynamicCast<QuicCongestionOps> (m_congestionControl);
-      if (qcc)
-        {
-          qcc->OnPacketSent (m_tcb, packetNumber, isAckOnly);
-        }
+      if (qcc) qcc->OnPacketSent (m_tcb, packetNumber, isAckOnly);
     }
+    
   if (!isAckOnly)
     {
       m_pnSpaces[space].m_ackElicitingOutstanding = true;
-      // Update the time of last sent packet.
       m_pnSpaces[space].m_timeOfLastSentAckElicitingPacket = Simulator::Now ();
       SetReTxTimeout ();
     }
+
+  NS_LOG_INFO("QUIC SendDataPacket --> Sent Pkt nº" << packetNumber.GetValue() 
+              << " on space " << space << "(Size: " << finalSize << " bytes)");
 
   return sz;
 }
@@ -2615,6 +2553,7 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
   int isAckEliciting = 0;
   bool unsupportedVersion = false;
   PacketNumberSpace space = APPLICATION_DATA;
+  bool isOutOfOrder = false;
 
   // 1. Handle 0-RTT packets (Early Data)
   // RFC 9000: Servers must be able to process 0-RTT packets during or even before the handshake
@@ -2637,7 +2576,7 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
            */
           if (m_socketState == LISTENING || m_socketState == CONNECTING_SVR)
             {
-              NS_LOG_INFO ("Server receives 0-RTT packet during handshake. Buffering early data.");
+              NS_LOG_INFO ("Server receives 0-RTT packet during handshake. Processing early data.");
 
               // Verify if the 0-RTT handshake is allowed by policy
               if (!m_quicl4->Is0RTTHandshakeAllowed ())
@@ -2647,31 +2586,25 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
                                    "0-RTT Handshake not allowed by Server");
                   return;
                 }
-
-              if (m_serverBusy)
-                {
-                  AbortConnection (QuicSubheader::TransportErrorCodes_t::SERVER_BUSY,
-                                   "Server too busy to accept new connections");
-                  return;
-                }
-              // We only buffer the data and wait for the INITIAL packet to formalize the connection.
+              // We process the data but it is the INITIAL packet who will formalize the connection.
             }
           else // m_socketState == OPEN
             {
-              // Handle 0-RTT packets that arrive late due to network reordering
+              // Handle 0-RTT packets that arrive late
               NS_LOG_INFO ("Received late 0-RTT packet while already in OPEN state");
             }
 
           space = APPLICATION_DATA;
-          isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
+          SequenceNumber32 currentPn = quicHeader.GetPacketNumber();
+          isOutOfOrder = IsOutOfOrder(space, currentPn);
           
           if (m_socketState == IDLE || m_socketState == CLOSING) return;
 
           // Track packet number for acknowledgement
-          m_pnSpaces[space].m_receivedPacketNumbers.push_back (quicHeader.GetPacketNumber ());
-          m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue (), 
-                                                         quicHeader.GetPacketNumber ().GetValue ());
+          m_pnSpaces[space].m_receivedPacketNumbers.push_back (currentPn);
+          m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue(), currentPn.GetValue());
           m_pnSpaces[space].m_lastReceived = Simulator::Now ();
+          isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
         }
       else
         {
@@ -2685,19 +2618,13 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
     {
       NS_LOG_INFO ("Server receives INITIAL packet");
       
-      // If we were LISTENING (and maybe buffered 0-RTT data), now we officially move to CONNECTING_SVR
+      // If we were LISTENING move to CONNECTING_SVR
       if (m_socketState == LISTENING)
         {
           SetState (CONNECTING_SVR);
         }
 
-      if (m_serverBusy)
-        {
-          AbortConnection (QuicSubheader::TransportErrorCodes_t::SERVER_BUSY, "Server busy");
-          return;
-        }
-
-      // Enforce minimum initial packet size (RFC 9000 anti-amplification)
+      // Check minimum initial packet size (RFC 9000 anti-amplification)
       if (p->GetSize () < QuicSocketBase::MIN_INITIAL_PACKET_SIZE)
         {
           NS_LOG_WARN ("Initial packet too small (" << p->GetSize() << " bytes)");
@@ -2706,11 +2633,14 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
         }
 
       space = INITIAL_DATA;
-      m_pnSpaces[space].m_receivedPacketNumbers.push_back (quicHeader.GetPacketNumber ());
-      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue (), quicHeader.GetPacketNumber ().GetValue ());
+      SequenceNumber32 currentPn = quicHeader.GetPacketNumber();
+      isOutOfOrder = IsOutOfOrder(space, currentPn);
+
+      // Track packet number for acknowledgement
+      m_pnSpaces[space].m_receivedPacketNumbers.push_back (currentPn);
+      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue(), currentPn.GetValue());
       m_pnSpaces[space].m_lastReceived = Simulator::Now ();
       isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
-      if (isAckEliciting == 1) MaybeQueueAck (space);
 
       if (m_socketState == IDLE || m_socketState == CLOSING) return;
 
@@ -2723,19 +2653,21 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
     {
       NS_LOG_INFO ("Receiving HANDSHAKE packet");
       space = HANDSHAKE_DATA;
-      m_pnSpaces[space].m_receivedPacketNumbers.push_back (quicHeader.GetPacketNumber ());
-      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue (), 
-                                                     quicHeader.GetPacketNumber ().GetValue ());
+      SequenceNumber32 currentPn = quicHeader.GetPacketNumber();
+      isOutOfOrder = IsOutOfOrder(space, currentPn);
+
+      // Track packet number for acknowledgement
+      m_pnSpaces[space].m_receivedPacketNumbers.push_back (currentPn);
+      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue(), currentPn.GetValue());
       m_pnSpaces[space].m_lastReceived = Simulator::Now ();
-      
       isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
-      if (isAckEliciting == 1) MaybeQueueAck (space);
 
       if (m_socketState == IDLE || m_socketState == CLOSING) return;
 
       // RFC 9000: Handshake is confirmed. Move to OPEN state and enable SHORT headers for subsequent data.
       SetState (OPEN);
       m_connected = true; 
+      NS_LOG_INFO (this << " m_connected set to true");
       Simulator::ScheduleNow (&QuicSocketBase::ConnectionSucceeded, this);
       m_congestionControl->CongestionStateSet (m_tcb, TcpSocketState::CA_OPEN);
       
@@ -2760,11 +2692,13 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
     {
       NS_LOG_INFO ("Received SHORT packet while in OPEN state");
       space = APPLICATION_DATA;
-      m_pnSpaces[space].m_receivedPacketNumbers.push_back (quicHeader.GetPacketNumber ());
-      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue (), 
-                                                     quicHeader.GetPacketNumber ().GetValue ());
-      m_pnSpaces[space].m_lastReceived = Simulator::Now ();
+      SequenceNumber32 currentPn = quicHeader.GetPacketNumber();
+      isOutOfOrder = IsOutOfOrder(space, currentPn);
 
+      // Track packet number for acknowledgement
+      m_pnSpaces[space].m_receivedPacketNumbers.push_back (currentPn);
+      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue(), currentPn.GetValue());
+      m_pnSpaces[space].m_lastReceived = Simulator::Now ();
       isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
     }
 
@@ -2848,7 +2782,7 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
   if (isAckEliciting == 1 && !unsupportedVersion)
     {
       NS_LOG_DEBUG ("Packet is ack-eliciting, scheduling ACK in space " << space);
-      MaybeQueueAck (space);
+      MaybeQueueAck (space, isOutOfOrder);
     }
   else if (isAckEliciting == 0)
     {
@@ -2903,12 +2837,12 @@ QuicSocketBase::SetState (TracedValue<QuicStates_t> newstate)
   if (m_quicl4->IsServer ())
     {
       NS_LOG_INFO (
-        "Server " << QuicStateName[m_socketState] << " -> " << QuicStateName[newstate] << "");
+        "Server " << QuicStateName[m_socketState] << " -> " << QuicStateName[newstate] << " (connected=" << m_connected << ", confirmed=" << m_handshakeConfirmed << ")");
     }
   else
     {
       NS_LOG_INFO (
-        "Client " << QuicStateName[m_socketState] << " -> " << QuicStateName[newstate] << "");
+        "Client " << QuicStateName[m_socketState] << " -> " << QuicStateName[newstate] << " (connected=" << m_connected << ", confirmed=" << m_handshakeConfirmed << ")");
     }
 
   m_socketState = newstate;

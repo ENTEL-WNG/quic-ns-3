@@ -522,7 +522,7 @@ public:
   /**
    * \brief Schedule a queue ACK has if needed
    */
-  void MaybeQueueAck (PacketNumberSpace space);
+  void MaybeQueueAck (PacketNumberSpace space, bool isOutOfOrder);
 
   /**
    * \brief Send an ACK frame
@@ -744,14 +744,12 @@ protected:
   void DoRetransmit (std::vector<Ptr<QuicSocketTxItem> > lostPackets);
 
   /**
-   * \brief Extract at most maxSize bytes from the TxBuffer at sequence packetNumber, add the
-   *        QUIC header, and send to QuicL4Protocol
+   * \brief Extract at most maxSize bytes from the TxBuffer for the given packet number
+   *        space, add the QUIC header, ACK frames if any, and send to QuicL4Protocol.
    *
    * According to the internal state of the socket, a different header is built.
-   * Sequence numbers should be 64 bits in the QUIC standard, but we use 32 to
-   * be compatible with the TcpSocketBase class
    *
-   * \param seq the sequence number
+   * \param space the packet space number
    * \param maxSize the maximum data block to be transmitted (in bytes)
    * \param withAck forces an ACK to be sent
    * \returns the number of bytes sent
@@ -821,11 +819,13 @@ protected:
   bool IsVersionSupported (uint32_t version);
 
   /**
-   * \brief Check if there are missing packets in the m_receivedPacketNumbers list
+   * \brief Check if the new packet number has skipped a number or is old.
    *
-   * \return true if there are missing packets
+   * \param space the packet number space to check
+   * \param packetNumber the packet number of the currently processed packet
+   * \return true if the recevied packet is out of order
    */
-  bool HasReceivedMissing ();
+  bool IsOutOfOrder (PacketNumberSpace space, SequenceNumber32 packetNumber);
 
   /**
    * \brief Send an ACK packet
@@ -875,7 +875,6 @@ protected:
   TracedValue<bool> m_handshakeConfirmed;   //!< True if the handshake has been confirmed
   TracedValue<QuicStates_t> m_socketState;  //!< State in the Congestion state machine
   uint16_t m_transportErrorCode;            //!< Quic transport error code
-  bool m_serverBusy;                        //!< If true, server too busy to accept new connections
   mutable enum SocketErrno m_errno;         //!< Socket error code
   bool m_connected;                         //!< Check if connection is established
   uint64_t m_connectionId;                  //!< Connection id

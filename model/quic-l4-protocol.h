@@ -262,7 +262,7 @@ public:
   void ForwardUp (Ptr<Socket> sock);
 
   /**
-   * \brief Set the receive callback for the underlyong UDP socket
+   * \brief Set the receive callback for the underlyng UDP socket
    *
    * \param handler a callback
    * \param sock the socket
