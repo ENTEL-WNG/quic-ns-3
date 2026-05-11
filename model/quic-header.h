@@ -36,11 +36,17 @@ namespace ns3 {
 
 /**
  * \ingroup quic
- * \brief Header for the QUIC Protocol
+ * \brief Header for the QUIC protocol.
  *
- * This class has fields corresponding to those in a QUIC header
- * (connection id, packet number, version, flags, etc) as well
- * as methods for serialization to and deserialization from a buffer.
+ * \note **RFC 9000 DEVIATION (Simplified Long Headers):**
+ * This implementation uses a simplified version of QUIC Long Headers. 
+ * For simulation efficiency and simplicity, it skips the use of Variable-Length 
+ * Integers (VarInts) required by RFC 9000. Specifically, it omits the `Token Length` 
+ * and `Token` fields in INITIAL packets (Section 17.2.2), and the `Length` field 
+ * in all Long Headers (Section 17.2).
+ *
+ * \todo Implement QUIC Variable-Length Integer encoding/decoding to add support 
+ * for `Token` and `Length` fields in Long Headers to achieve 100% RFC 9000 compliance.
  */
 class QuicHeader : public Header
 {
@@ -267,49 +273,46 @@ public:
   void SetFormat (bool form);
 
   /**
-   * \brief Check if the header is Short
-   * \return true if the header is Short, false otherwise
+   * \brief Check if the header is a Long Header (bit 0x80 set)
+   * \return true if it is a Long Header
    */
-  bool IsShort () const;
+  bool IsLong (void) const;
 
   /**
-   * \brief Check if the header is Long
-   * \return true if the header is Long, false otherwise
+   * \brief Check if the header is a Short Header (bit 0x80 not set)
+   * \return true if it is a Short Header
    */
-  bool IsLong ()  const
-  {
-    return !IsShort ();
-  }
+  bool IsShort (void) const;
 
   /**
-   * \brief Check if the header is Version Negotiation
-   * \return true if the header is Version Negotiation, false otherwise
+   * \brief Check if the packet is of type INITIAL
+   * \return true if type is INITIAL
    */
-  bool IsVersionNegotiation () const;
+  bool IsInitial (void) const;
 
   /**
-   * \brief Check if the header is Initial
-   * \return true if the header is Initial, false otherwise
+   * \brief Check if the packet is of type HANDSHAKE
+   * \return true if type is HANDSHAKE
    */
-  bool IsInitial () const;
+  bool IsHandshake (void) const;
 
   /**
-   * \brief Check if the header is Retry
-   * \return true if the header is Retry, false otherwise
+   * \brief Check if the packet is of type 0-RTT (Early Data)
+   * \return true if type is 0-RTT
    */
-  bool IsRetry () const;
+  bool IsORTT (void) const;
 
   /**
-   * \brief Check if the header is Handshake
-   * \return true if the header is Handshake, false otherwise
+   * \brief Check if the packet is of type RETRY
+   * \return true if type is RETRY
    */
-  bool IsHandshake () const;
+  bool IsRetry (void) const;
 
   /**
-   * \brief Check if the header is 0-Rtt Protected
-   * \return true if the header is 0-Rtt Protected, false otherwise
+   * \brief Check if the packet is a Version Negotiation packet
+   * \return true if it is Version Negotiation
    */
-  bool IsORTT () const;
+  bool IsVersionNegotiation (void) const;
 
   /**
    * \brief Check if the header has the connection id

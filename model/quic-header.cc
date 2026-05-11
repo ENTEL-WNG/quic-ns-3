@@ -126,6 +126,12 @@ QuicHeader::CalculateHeaderLength () const
        * - SCID Length: 8 bits (Value is 0, so no SCID follows)
        */
       len = 8 + 32 + 8 + (CID_LENGTH * 8) + 8;
+      /* * TODO (RFC 9000): Missing Fields
+       * - INITIAL packets should include Token Length (VarInt) and Token.
+       * - All Long Headers should include a Length field (VarInt) indicating
+       * the length of the remainder of the packet (PN + Payload).
+       * These fields are currently omitted for simulation simplicity.
+       */
       if (!IsVersionNegotiation ()) 
         {
           len += GetPacketNumLen ();
@@ -196,6 +202,11 @@ QuicHeader::Serialize (Buffer::Iterator start) const
       i.WriteHtonU64 (m_connectionId);
       // SCID Length (Value is 0, so no SCID follows)
       i.WriteU8 (0);
+
+      /* TODO (RFC 9000 Section 17.2): 
+       * Insert `Token Length` and `Token` here if m_type == INITIAL.
+       * Insert `Length` (VarInt) here for all Long Headers except Version Negotiation.
+       */
 
       if (!IsVersionNegotiation ()) 
         {
@@ -280,6 +291,11 @@ QuicHeader::Deserialize (Buffer::Iterator start)
         }
       uint8_t scidLen = i.ReadU8 ();
       i.Next (scidLen);
+
+      /* TODO (RFC 9000 Section 17.2): 
+       * Read `Token Length` and advance Buffer for `Token` if INITIAL.
+       * Read `Length` (VarInt) for all Long Headers before reading Packet Number.
+       */
 
       if (!IsVersionNegotiation ()) 
         {
@@ -540,7 +556,14 @@ QuicHeader::SetKeyPhaseBit (bool keyPhaseBit)
   m_k = keyPhaseBit;
 }
 
-bool QuicHeader::IsShort () const
+bool
+QuicHeader::IsLong () const
+{
+  return m_form == LONG;
+}
+
+bool
+QuicHeader::IsShort () const
 {
   return m_form == SHORT;
 }
@@ -554,25 +577,25 @@ QuicHeader::IsVersionNegotiation () const
 bool
 QuicHeader::IsInitial () const
 {
-  return m_type == INITIAL;
-}
-
-bool
-QuicHeader::IsRetry () const
-{
-  return m_type == RETRY;
-}
-
-bool
-QuicHeader::IsHandshake () const
-{
-  return m_type == HANDSHAKE;
+  return IsLong () && m_type == INITIAL;
 }
 
 bool
 QuicHeader::IsORTT () const
 {
-  return m_type == ZERO_RTT;
+  return IsLong () && m_type == ZERO_RTT;
+}
+
+bool
+QuicHeader::IsHandshake () const
+{
+  return IsLong () && m_type == HANDSHAKE;
+}
+
+bool
+QuicHeader::IsRetry () const
+{
+  return IsLong () && m_type == RETRY;
 }
 
 bool QuicHeader::HasVersion () const
