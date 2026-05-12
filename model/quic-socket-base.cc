@@ -1017,7 +1017,7 @@ QuicSocketBase::SendPendingData (bool withAck)
       else break;
     }
 
-  // 3. finally APPLICATION_DATA
+  // 3. finally, APPLICATION_DATA
   while (m_txBuffer->AppSize () > 0)
     {
       // check draining period
@@ -1039,9 +1039,11 @@ QuicSocketBase::SendPendingData (bool withAck)
 
       // check congestion window
       uint32_t win = AvailableWindow ();
-      if (win == 0) 
+      // Here we check for a minimum window size to avoid Silly Window Syndrome
+      uint32_t minRequiredBytes = 30; // Short QUIC header (~15B) + frame overhead + mínim payload
+      if (win < minRequiredBytes) 
         {
-          NS_LOG_DEBUG ("Skipping Packet due to zero window");
+          NS_LOG_DEBUG ("Skipping Packet due to insufficient window (" << win << " bytes available)");
           break;
         }
 
