@@ -1907,31 +1907,26 @@ QuicSocketBase::SendInitialHandshake (uint8_t type,
       NS_LOG_INFO ("Create VERSION_NEGOTIATION");
       m_receivedTransportParameters = false;
 
-      std::vector<uint32_t> supportedVersions;
-      supportedVersions.push_back (QUIC_VERSION);
-      supportedVersions.push_back (QUIC_VERSION_NS3_IMPL);
+      // Use a C-style array to ensure compile-time size evaluation for the buffer,
+      // which can be more robust for compiler static analysis.
+      const uint32_t supportedVersions[] = {QUIC_VERSION, QUIC_VERSION_NS3_IMPL};
+      const size_t numVersions = sizeof(supportedVersions) / sizeof(supportedVersions[0]);
+      uint8_t *buffer = new uint8_t[4 * numVersions];
 
-      uint8_t *buffer = new uint8_t[4 * supportedVersions.size ()];
-
-      Ptr<Packet> payload = Create<Packet> (buffer,
-                                            4 * supportedVersions.size ());
-
-      for (uint8_t i = 0; i < (uint8_t) supportedVersions.size (); i++)
+      for (size_t i = 0; i < numVersions; i++)
         {
-
           buffer[4 * i] = (supportedVersions[i]);
           buffer[4 * i + 1] = (supportedVersions[i] >> 8);
           buffer[4 * i + 2] = (supportedVersions[i] >> 16);
           buffer[4 * i + 3] = (supportedVersions[i] >> 24);
-          //NS_LOG_INFO(" " << (uint64_t) buffer[4*i] << " " << (uint64_t)buffer[4*i+1] << " " << (uint64_t)buffer[4*i+2] << " " << (uint64_t)buffer[4*i+3] );
-
         }
 
-      Ptr<Packet> p = Create<Packet> (buffer, 4 * supportedVersions.size ());
+      std::vector<uint32_t> supportedVersionsVec(supportedVersions, supportedVersions + numVersions);
+      Ptr<Packet> p = Create<Packet> (buffer, 4 * numVersions);
       QuicHeader head = QuicHeader::CreateVersionNegotiation (
         quicHeader.GetConnectionId (),
         QUIC_VERSION_NEGOTIATION,
-        supportedVersions);
+        supportedVersionsVec);
 
       // Set initial congestion window and Ssthresh
       m_tcb->m_cWnd = m_tcb->GetInitialWindow();
@@ -3103,6 +3098,13 @@ QuicSocketBase::UpdateCwnd (uint32_t oldValue, uint32_t newValue)
 {
   NS_LOG_FUNCTION (this << oldValue << newValue);
   m_cWndTrace (oldValue, newValue);
+  if (m_socketState == IDLE || m_socketState == LISTENING)
+    {
+      return;
+    }
+  // Trigger a check for data to send, otherwise QUIC won't
+  // realise it has CWND available until an ACK arrives.
+  Simulator::ScheduleNow(&QuicSocketBase::SendPendingData, this, m_connected);
 }
 
 void
