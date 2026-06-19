@@ -150,6 +150,132 @@ QuicCongestionOpsTestCase::DoRun (void)
 
 }
 
+/**
+ * Test Case 2: No cwnd reduction twice in one RTT (RFC 9002 §7.3.2)
+ *
+ * "The sender MUST NOT reduce cwnd more than once per RTT."
+ * This is enforced by the recovery epoch: a second loss within the same
+ * recovery epoch (packetNumber <= endOfRecovery) must NOT trigger another
+ * cwnd reduction.
+ */
+class QuicNoDuplicateReductionTestCase : public TestCase
+{
+public:
+  QuicNoDuplicateReductionTestCase ();
+
+private:
+  virtual void DoRun (void);
+};
+
+QuicNoDuplicateReductionTestCase::QuicNoDuplicateReductionTestCase ()
+  : TestCase ("No cwnd reduction twice per RTT - recovery epoch guard (RFC 9002 §7.3.2)")
+{}
+
+class TestQuicCongestionOps2 : public QuicCongestionOps
+{
+public:
+  void PublicOnPacketAcked (Ptr<TcpSocketState> tcb, Ptr<QuicSocketTxItem> ackedPacket)
+  {
+    OnPacketAcked (tcb, ackedPacket);
+  }
+};
+
+void
+QuicNoDuplicateReductionTestCase::DoRun (void)
+{
+  Ptr<QuicSocketState> tcb = CreateObject<QuicSocketState> ();
+  Ptr<TestQuicCongestionOps2> cc = CreateObject<TestQuicCongestionOps2> ();
+
+  tcb->m_segmentSize = 1200;
+  tcb->m_cWnd = 12000;
+  tcb->m_ssThresh = UINT32_MAX;
+  tcb->m_kLossReductionFactor = 0.5;
+  tcb->m_highTxMark = SequenceNumber32 (10);
+
+  // First loss: triggers recovery, cwnd halved
+  std::vector<Ptr<QuicSocketTxItem>> firstLoss;
+  Ptr<QuicSocketTxItem> lost1 = Create<QuicSocketTxItem> ();
+  lost1->m_packet = Create<Packet> (1200);
+  lost1->m_packetNumber = SequenceNumber32 (3);
+  lost1->m_lastSent = Seconds (1.0);
+  firstLoss.push_back (lost1);
+
+  cc->OnPacketsLost (tcb, firstLoss);
+  uint32_t cwndAfterFirstLoss = tcb->m_cWnd.Get ();
+  // 12000 * 0.5 = 6000, but floor is GetMinimumWindow()
+  NS_TEST_ASSERT_MSG_EQ (cwndAfterFirstLoss, 6000U,
+                         "First loss should halve cwnd");
+  NS_TEST_ASSERT_MSG_EQ (tcb->m_endOfRecovery, SequenceNumber32 (10),
+                         "endOfRecovery set to highTxMark after first loss");
+
+  // Second loss within same recovery epoch (packetNumber <= endOfRecovery=10)
+  // RFC 9002 §7.3.2: cwnd MUST NOT be reduced again
+  std::vector<Ptr<QuicSocketTxItem>> secondLoss;
+  Ptr<QuicSocketTxItem> lost2 = Create<QuicSocketTxItem> ();
+  lost2->m_packet = Create<Packet> (1200);
+  lost2->m_packetNumber = SequenceNumber32 (5); // Still within recovery epoch
+  lost2->m_lastSent = Seconds (1.1);
+  secondLoss.push_back (lost2);
+
+  cc->OnPacketsLost (tcb, secondLoss);
+  uint32_t cwndAfterSecondLoss = tcb->m_cWnd.Get ();
+  NS_TEST_ASSERT_MSG_EQ (cwndAfterSecondLoss, cwndAfterFirstLoss,
+                         "Second loss in same recovery epoch must NOT reduce cwnd again (RFC 9002 §7.3.2)");
+}
+
+/**
+ * Test Case 3: Minimum window floor enforcement (RFC 9002 §7.2)
+ *
+ * "The RECOMMENDED minimum congestion window is 2 * max_datagram_size."
+ * After any reduction, cwnd must not drop below 2*MSS.
+ */
+class QuicMinWindowFloorTestCase : public TestCase
+{
+public:
+  QuicMinWindowFloorTestCase ();
+
+private:
+  virtual void DoRun (void);
+};
+
+QuicMinWindowFloorTestCase::QuicMinWindowFloorTestCase ()
+  : TestCase ("Minimum window floor after loss (RFC 9002 §7.2)")
+{}
+
+void
+QuicMinWindowFloorTestCase::DoRun (void)
+{
+  Ptr<QuicSocketState> tcb = CreateObject<QuicSocketState> ();
+  Ptr<TestQuicCongestionOps2> cc = CreateObject<TestQuicCongestionOps2> ();
+
+  tcb->m_segmentSize = 1200;
+  tcb->m_kLossReductionFactor = 0.5;
+  tcb->m_kMinimumWindowMultiplier = 2;
+  tcb->m_highTxMark = SequenceNumber32 (5);
+
+  // Start with a very small cwnd just above minimum
+  tcb->m_cWnd = 3 * tcb->m_segmentSize; // 3600 bytes
+  tcb->m_ssThresh = 3600;
+  tcb->m_endOfRecovery = SequenceNumber32 (0); // Not in recovery
+
+  std::vector<Ptr<QuicSocketTxItem>> lostPackets;
+  Ptr<QuicSocketTxItem> lost = Create<QuicSocketTxItem> ();
+  lost->m_packet = Create<Packet> (1200);
+  lost->m_packetNumber = SequenceNumber32 (3);
+  lost->m_lastSent = Seconds (1.0);
+  lostPackets.push_back (lost);
+
+  cc->OnPacketsLost (tcb, lostPackets);
+
+  uint32_t minWindow = tcb->GetMinimumWindow ();
+  NS_TEST_ASSERT_MSG_GT_OR_EQ (tcb->m_cWnd.Get (), minWindow,
+                               "cwnd must not drop below 2*MSS minimum after loss (RFC 9002 §7.2)");
+  // 3600 * 0.5 = 1800 = 1.5*MSS, which is less than 2*MSS=2400
+  // So the floor should kick in and cwnd = 2*MSS = 2400
+  NS_TEST_ASSERT_MSG_EQ (tcb->m_cWnd.Get (), minWindow,
+                         "cwnd floored at 2*MSS when reduction would go below minimum");
+}
+
 class QuicCongestionOpsTestSuite : public TestSuite
 {
 public:
@@ -157,6 +283,8 @@ public:
     : TestSuite ("quic-congestion-ops", UNIT)
   {
     AddTestCase (new QuicCongestionOpsTestCase, TestCase::QUICK);
+    AddTestCase (new QuicNoDuplicateReductionTestCase, TestCase::QUICK);
+    AddTestCase (new QuicMinWindowFloorTestCase, TestCase::QUICK);
   }
 };
 

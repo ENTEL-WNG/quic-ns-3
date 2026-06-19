@@ -468,8 +468,18 @@ void
 QuicStreamBase::SetMaxStreamData (uint32_t maxStreamData)
 {
   NS_LOG_FUNCTION (this << maxStreamData);
-  NS_LOG_DEBUG ("Update max stream data from " << m_maxStreamData << " to " << maxStreamData);
-  m_maxStreamData = maxStreamData;
+  // RFC 9000 §4.1: "A sender MUST ignore any MAX_STREAM_DATA or MAX_DATA
+  // frames that do not increase flow control limits."
+  if (maxStreamData > m_maxStreamData)
+    {
+      NS_LOG_DEBUG ("Update max stream data from " << m_maxStreamData << " to " << maxStreamData);
+      m_maxStreamData = maxStreamData;
+    }
+  else
+    {
+      NS_LOG_DEBUG ("Ignoring non-increasing max stream data " << maxStreamData
+                    << " (current: " << m_maxStreamData << ")");
+    }
 }
 
 uint32_t

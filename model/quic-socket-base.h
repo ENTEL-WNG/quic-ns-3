@@ -721,6 +721,18 @@ public:
 
   bool IsServer(void) const { return m_isServer;}
 
+  /**
+   * \brief Update the state of the internal state machine
+   *
+   * \param the new state
+   */
+  void SetState (TracedValue<QuicStates_t> state);
+
+  /**
+   * \return The TCB.
+   */
+  Ptr<QuicSocketState> GetTcb () const { return m_tcb; }
+
 protected:
   /**
    * \brief Connect the TCB traces
@@ -813,13 +825,6 @@ protected:
    */
   void ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
                      Address &address);
-
-  /**
-   * \brief Update the state of the internal state machine
-   *
-   * \param the new state
-   */
-  void SetState (TracedValue<QuicStates_t> state);
 
   /**
    * \brief Check if a version is supported by the QuicSocket
