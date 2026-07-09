@@ -24,8 +24,8 @@
 
 #include "quic-bbr.h"
 #include "ns3/log.h"
-#include "ns3/quic-socket-base.h"
-#include "ns3/quic-socket-tx-buffer.h"
+#include "quic-socket-base.h"
+#include "quic-socket-tx-buffer.h"
 #include "ns3/simulator.h"
 
 namespace ns3 {
