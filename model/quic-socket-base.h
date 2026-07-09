@@ -103,7 +103,6 @@ public:
                                                  *   loss detection considers a packet lost. */
   double m_kTimeThreshold;                      /**< Maximum reordering in time space before time based loss detection
                                                  *   considers a packet lost. In fraction of an RTT. */
-  Time m_max_ack_delay;                         //!< The maximum ack delay promised to the peer.
 
   Time m_kInitialRtt;                    //!< The default RTT used before an RTT sample is taken.
   Time m_kGranularity;                   //!< The clock granularity (default 1ms).
@@ -904,7 +903,7 @@ protected:
   uint32_t m_initial_max_stream_id_bidi; //!< The the initial maximum number of application-owned bidirectional streams the peer may initiate
   TracedValue<Time> m_idleTimeout;       //!< The idle timeout value in seconds
   uint8_t m_ack_delay_exponent;          //!< The exponent used to decode the ack delay field in the ACK frame
-  Time m_max_ack_delay;                  //!< The maximum ack delay we promise to the peer
+  Time m_max_ack_delay;                  //!< The maximum ack delay we promise to the peer (RFC 9000 18.2); purely local ACK-sending policy, not congestion-control state
   uint32_t m_initial_max_stream_id_uni;  //!< The initial maximum number of application-owned unidirectional streams the peer may initiate
   uint32_t m_maxTrackedGaps;             //!< The maximum number of gaps in an ACK
 

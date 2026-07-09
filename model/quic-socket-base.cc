@@ -255,10 +255,6 @@ QuicSocketState::GetTypeId (void)
                    DoubleValue (9.0 / 8),
                    MakeDoubleAccessor (&QuicSocketState::m_kTimeThreshold),
                    MakeDoubleChecker<double> (0))
-    .AddAttribute ("max_ack_delay", "The maximum ack delay promised to the peer",
-                   TimeValue (MilliSeconds (25)),
-                   MakeTimeAccessor (&QuicSocketState::m_max_ack_delay),
-                   MakeTimeChecker ())
     .AddAttribute ("kMaxPacketsReceivedBeforeAckSend",
                    "The maximum number of packets without sending an ACK",
                    UintegerValue (2),
@@ -303,7 +299,6 @@ QuicSocketState::QuicSocketState ()
   : TcpSocketState (),
     m_kPacketThreshold (3),
     m_kTimeThreshold (9.0 / 8),
-    m_max_ack_delay (MilliSeconds (25)),
     m_kInitialRtt (MilliSeconds (333)),
     m_kGranularity (MilliSeconds (1)),
     m_kMaxPacketsReceivedBeforeAckSend (20),
@@ -342,7 +337,6 @@ QuicSocketState::QuicSocketState (const QuicSocketState &other)
   : TcpSocketState (other),
     m_kPacketThreshold (other.m_kPacketThreshold),
     m_kTimeThreshold (other.m_kTimeThreshold),
-    m_max_ack_delay (other.m_max_ack_delay),
     m_kInitialRtt (other.m_kInitialRtt),
     m_kGranularity (other.m_kGranularity),
     m_kMaxPacketsReceivedBeforeAckSend (other.m_kMaxPacketsReceivedBeforeAckSend),
@@ -504,7 +498,6 @@ QuicSocketBase::QuicSocketBase (void)
       m_pnSpaces[i] = QuicPacketNumberSpace ();
     }
 
-  m_tcb->m_max_ack_delay = m_max_ack_delay;
   m_txBuffer->SetQuicSocketState (m_tcb);
 
   m_pacingTimer.SetFunction (&QuicSocketBase::NotifyPacingPerformed, this);
@@ -1131,7 +1124,7 @@ if (space == INITIAL_DATA || space == HANDSHAKE_DATA)
       if (!pnSpace.m_delAckEvent.IsRunning ())
         {
           NS_LOG_INFO ("Schedule a delayed ACK for space " << space);
-          pnSpace.m_delAckEvent = Simulator::Schedule (m_tcb->m_max_ack_delay, static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
+          pnSpace.m_delAckEvent = Simulator::Schedule (m_max_ack_delay, static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
         }
     }
 }
@@ -2384,7 +2377,7 @@ QuicSocketBase::OnSendingTransportParameters ()
     m_initial_max_stream_data, m_max_data, m_initial_max_stream_id_bidi,
     (uint16_t) m_idleTimeout.Get ().GetSeconds (),
     m_tcb->m_segmentSize,
-    m_ack_delay_exponent, (uint16_t) m_max_ack_delay.GetMilliSeconds (), 
+    m_ack_delay_exponent, (uint16_t) m_max_ack_delay.GetMilliSeconds (),
     m_initial_max_stream_id_uni);
 
   return transportParameters;
@@ -3187,10 +3180,6 @@ void
 QuicSocketBase::SetMaxAckDelay (Time maxAckDelay)
 {
   m_max_ack_delay = maxAckDelay;
-  if (m_tcb)
-    {
-      m_tcb->m_max_ack_delay = maxAckDelay;
-    }
 }
 
 Time
