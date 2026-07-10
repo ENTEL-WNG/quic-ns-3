@@ -28,6 +28,7 @@
 #include <stdint.h>
 #include <map>
 #include "ns3/node.h"
+#include "ns3/traced-value.h"
 #include "ns3/ipv4-address.h"
 #include "ns3/ipv6-address.h"
 #include "ns3/sequence-number.h"
@@ -36,6 +37,13 @@
 #include "ns3/socket.h"
 
 namespace ns3 {
+
+enum QuicSocketType
+{
+  QUIC_IPV4_UDP = 0,
+  QUIC_IPV6_UDP = 1,
+  QUIC_UNDETERMINED = 2
+};
 
 class QuicSocketBase;
 class Ipv4EndPointDemux;
@@ -61,6 +69,9 @@ public:
   Ptr<Socket> m_budpSocket6;         //!< The IPv6 UDP this binding is associated with
   Ptr<QuicSocketBase> m_quicSocket;  //!< The quic socket associated with this binding
   bool m_listenerBinding;            //!< A flag that indicates if in this binding resides the listening socket
+  QuicSocketType m_socketType;       //!< A flag that indicates the type of socket stored in this binding
+  Address m_peerAddress;             //!< Peer Address where to send dataframes 
+  bool m_hasPeerAddress;             //!< peerAddress validity flag
 };
 
 /**
@@ -251,7 +262,7 @@ public:
   void ForwardUp (Ptr<Socket> sock);
 
   /**
-   * \brief Set the receive callback for the underlyong UDP socket
+   * \brief Set the receive callback for the underlyng UDP socket
    *
    * \param handler a callback
    * \param sock the socket
@@ -292,9 +303,9 @@ public:
   bool IsServer (void) const;
 
   /**
-   * \brief Check if this L4 Protocol allows the 0-Rtt Handshake start
+   * \brief Check if this L4 Protocol initiates/accepts connections with 0-Rtt Handshake
    *
-   * \return true if this L4 Protocol allows the 0-Rtt Handshake start, otherwhise false
+   * \return true if allowed, otherwhise false
    */
   bool Is0RTTHandshakeAllowed () const;
 
@@ -447,6 +458,7 @@ private:
   IpL4Protocol::DownTargetCallback m_downTarget;
   IpL4Protocol::DownTargetCallback6 m_downTarget6;
 
+  TracedCallback<Ptr<Socket>> m_newSocketTrace;
 };
 
 } // namespace ns3

@@ -85,7 +85,7 @@ public:
    */
   Ptr<TcpCongestionOps> Fork ();
 
-  // QuicCongestionControl Draft10
+  // RFC 9002 QUIC Recovery Section 7
 
   /**
    * \brief Method called when a packet is sent. It updates the quantities in the tcb
@@ -118,7 +118,7 @@ public:
   virtual void OnPacketsLost (Ptr<TcpSocketState> tcb, std::vector<Ptr<QuicSocketTxItem> > lostPackets);
 
 protected:
-  // QuicCongestionControl Draft10
+  // RFC 9002 QUIC Recovery Section 7
 
   /**
    * \brief Method called to update the Rtt. It updates the quantities in the tcb.
@@ -155,12 +155,6 @@ protected:
    */
   void OnPacketAckedCC (Ptr<TcpSocketState> tcb, Ptr<QuicSocketTxItem> ackedPacket);
 
-  /**
-   * \brief Method called when retransmission timeout fires. It updates the quantities in the tcb.
-   *
-   * \param tcb a smart pointer to the SocketState (it accepts a QuicSocketState)
-   */
-  virtual void OnRetransmissionTimeoutVerified (Ptr<TcpSocketState> tcb);
 
 };
 

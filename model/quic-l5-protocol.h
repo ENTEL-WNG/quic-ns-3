@@ -28,6 +28,7 @@
 #include "quic-transport-parameters.h"
 #include "quic-stream.h"
 #include "quic-subheader.h"
+#include "quic-socket.h"
 
 
 namespace ns3 {
@@ -94,7 +95,7 @@ public:
   /**
    * \brief Send a packet to the streams associated to this L5 protocol
    *
-   * The streams are created if not present. Stream 0 is not used (only for handshake)
+   * The streams are created if not present. All streams are available for application data per RFC 9000.
    *
    * \param data a smart pointer to a packet
    * \return always 0
@@ -119,11 +120,11 @@ public:
    * If a frame needs to be processed by the socket, it is sent back to the socket,
    * otherwise is forwarded to the correct stream
    *
-   * \param data a smart pointer to a Packet
+   * \param packet a smart pointer to a Packet
    * \param address the sender address
    * \return 0 if the received packet was ACK-only, -1 in case of errors, 1 if everything was OK;
    */
-  int DispatchRecv (Ptr<Packet> data, Address &address);
+  int DispatchRecv (Ptr<Packet> packet, Address &address, PacketNumberSpace space);
 
   //int DispatchRecv(Ptr<Packet> data, uint64_t streamId, Address &address);
 
@@ -170,20 +171,13 @@ public:
   Ptr<QuicStreamBase> SearchStream (uint64_t streamId);
 
   /**
-   * \brief Create a stream with ID equal to the number of already created streams
-   *
-   * \param streamDirectionType the stream direction
-   */
-  void CreateStream (const QuicStream::QuicStreamDirectionTypes_t streamDirectionType);
-
-  /**
-   * \brief create streamNum streams to be associated to this L5 object
+   * \brief create a new stream to be associated to this L5 object
    *
    * \param streamDirectionType the QUIC stream direction type,
    *   i.e., unidirectional or bidirectional
-   * \param the number of streams to be created
+   * \param the id of the stream to be created
    */
-  void CreateStream (const QuicStream::QuicStreamDirectionTypes_t streamDirectionType, uint64_t streamNum);
+  void CreateStream (const QuicStream::QuicStreamDirectionTypes_t streamDirectionType, uint64_t streamId);
 
   /**
    * \brief Get the maximum packet size from the underlying socket
@@ -191,13 +185,6 @@ public:
    * \return the maximum packet size in bytes
    */
   uint16_t GetMaxPacketSize () const;
-
-  /**
-   * \brief Check with the QUIC socket if the packet that has just been received could contain transport parameters
-   *
-   * \return a boolean, true if the packet that has just been received contains transport params
-   */
-  bool ContainsTransportParameters ();
 
   /**
    * \brief Pass the transportParameters to the the QUIC socket
@@ -228,11 +215,23 @@ public:
    */
   uint64_t GetMaxData ();
 
+  /**
+   * \brief Generate the next StreamID (taking into account if it's a client or server)
+   * \param isBidi true for bidireccional stream, false for unidireccional
+   * \return Next valid Stream ID
+   */
+  uint64_t GetNextStreamId (bool isBidi);
+
+  const std::vector<Ptr<QuicStreamBase> >& GetStreams() const;
+
 private:
   Ptr<QuicSocketBase> m_socket;                 //!< The Quic socket this stack is associated with
   Ptr<Node> m_node;                             //!< The node this stack is associated with
   uint64_t m_connectionId;                      //!< The connection id this stack is associated with
   std::vector<Ptr<QuicStreamBase> > m_streams;  //!< The streams this stack is associated with
+  uint64_t m_nextBidiStreamId;                  //!< The counter for the next bidirectional stream ID
+  uint64_t m_nextUniStreamId;                   //!< The counter for the next unidirectional stream ID
+  bool m_streamCountersInitialized;
 };
 
 } // namespace ns3

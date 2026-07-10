@@ -36,15 +36,28 @@ namespace ns3 {
 
 /**
  * \ingroup quic
- * \brief Header for the QUIC Protocol
+ * \brief Header for the QUIC protocol.
  *
- * This class has fields corresponding to those in a QUIC header
- * (connection id, packet number, version, flags, etc) as well
- * as methods for serialization to and deserialization from a buffer.
+ * \note **RFC 9000 DEVIATION (Simplified Long Headers):**
+ * This implementation uses a simplified version of QUIC Long Headers. 
+ * For simulation efficiency and simplicity, it skips the use of Variable-Length 
+ * Integers (VarInts) required by RFC 9000. Specifically, it omits the `Token Length` 
+ * and `Token` fields in INITIAL packets (Section 17.2.2), and the `Length` field 
+ * in all Long Headers (Section 17.2).
+ *
+ * \todo Implement QUIC Variable-Length Integer encoding/decoding to add support 
+ * for `Token` and `Length` fields in Long Headers to achieve 100% RFC 9000 compliance.
  */
 class QuicHeader : public Header
 {
 public:
+  /** 
+   * Fixed length for Connection IDs in this implementation (8 bytes).
+   * While RFC 9000 supports variable lengths (0-20 bytes), this model
+   * simplifies handling by using a fixed 64-bit identifier.
+   */
+  static const uint8_t CID_LENGTH = 8;
+
   /**
    * \brief Quic header form bit values
    */
@@ -55,15 +68,15 @@ public:
   } TypeFormat_t;
 
   /**
-   * \brief Quic long header type byte values
+   * \brief Quic long header type byte values (RFC 9000)
    */
   typedef enum
   {
-    VERSION_NEGOTIATION = 0,  //!< Version Negotiation
-    INITIAL  = 1,             //!< Initial
-    RETRY  = 2,               //!< Retry
-    HANDSHAKE  = 3,           //!< Handshake
-    ZRTT_PROTECTED  = 4,      //!< 0-Rtt Protected
+    INITIAL  = 0,             //!< Initial
+    ZERO_RTT = 1,             //!< 0-Rtt
+    HANDSHAKE = 2,            //!< Handshake
+    RETRY = 3,                //!< Retry
+    VERSION_NEGOTIATION = 4,  //!< Version Negotiation
     NONE = 5                  //!< No type byte
   } TypeLong_t;
 
@@ -77,13 +90,14 @@ public:
   } KeyPhase_t;
 
   /**
-   * \brief Quic packet number encodings for headers
+   * \brief Quic packet number encodings for headers (RFC 9000)
    */
   typedef enum
   {
-    ONE_OCTECT = 0x0,    //!< 1 Octet
-    TWO_OCTECTS  = 0x1,  //!< 2 Octets
-    FOUR_OCTECTS  = 0x2  //!< 4 Octects
+    PN_1_BYTE = 0x0,    //!< 1 Byte
+    PN_2_BYTES = 0x1,   //!< 2 Bytes
+    PN_3_BYTES = 0x2,   //!< 3 Bytes
+    PN_4_BYTES = 0x3    //!< 4 Bytes
   } TypeShort_t;
 
   QuicHeader ();
@@ -259,55 +273,58 @@ public:
   void SetFormat (bool form);
 
   /**
-   * \brief Check if the header is Short
-   * \return true if the header is Short, false otherwise
+   * \brief Check if the header is a Long Header (bit 0x80 set)
+   * \return true if it is a Long Header
    */
-  bool IsShort () const;
+  bool IsLong (void) const;
 
   /**
-   * \brief Check if the header is Long
-   * \return true if the header is Long, false otherwise
+   * \brief Check if the header is a Short Header (bit 0x80 not set)
+   * \return true if it is a Short Header
    */
-  bool IsLong ()  const
-  {
-    return !IsShort ();
-  }
+  bool IsShort (void) const;
 
   /**
-   * \brief Check if the header is Version Negotiation
-   * \return true if the header is Version Negotiation, false otherwise
+   * \brief Check if the packet is of type INITIAL
+   * \return true if type is INITIAL
    */
-  bool IsVersionNegotiation () const;
+  bool IsInitial (void) const;
 
   /**
-   * \brief Check if the header is Initial
-   * \return true if the header is Initial, false otherwise
+   * \brief Check if the packet is of type HANDSHAKE
+   * \return true if type is HANDSHAKE
    */
-  bool IsInitial () const;
+  bool IsHandshake (void) const;
 
   /**
-   * \brief Check if the header is Retry
-   * \return true if the header is Retry, false otherwise
+   * \brief Check if the packet is of type 0-RTT (Early Data)
+   * \return true if type is 0-RTT
    */
-  bool IsRetry () const;
+  bool IsORTT (void) const;
 
   /**
-   * \brief Check if the header is Handshake
-   * \return true if the header is Handshake, false otherwise
+   * \brief Check if the packet is of type RETRY
+   * \return true if type is RETRY
    */
-  bool IsHandshake () const;
+  bool IsRetry (void) const;
 
   /**
-   * \brief Check if the header is 0-Rtt Protected
-   * \return true if the header is 0-Rtt Protected, false otherwise
+   * \brief Check if the packet is a Version Negotiation packet
+   * \return true if it is Version Negotiation
    */
-  bool IsORTT () const;
+  bool IsVersionNegotiation (void) const;
 
   /**
    * \brief Check if the header has the connection id
    * \return true if the header has the connection id, false otherwise
    */
   bool HasConnectionId ()  const;
+
+  /**
+   * \brief Set the connection id flag
+   * \param connectionIdFlag the connection id flag for this QuicHeader
+   */
+  void SetConnectionIdFlag (bool connectionIdFlag);
 
   /**
    * \brief Check if the header has the version
@@ -325,12 +342,12 @@ public:
 
 private:
   /**
-   * \brief Calculates the header length (in words)
+   * \brief Calculates the header length (in bits)
    *
    * Given the standard size of the header, the method checks for options
-   * and calculates the real length (in words).
+   * and calculates the real length (in bits).
    *
-   * \return header length in 4-byte words
+   * \return header length in bits
    */
   uint32_t CalculateHeaderLength () const;
 

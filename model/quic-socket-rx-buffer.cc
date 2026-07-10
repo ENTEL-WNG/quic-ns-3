@@ -128,12 +128,12 @@ QuicSocketRxBuffer::Extract (uint32_t maxSize)
   NS_LOG_INFO (
     "Requested to extract " << extractSize << " bytes from QuicSocketRxBuffer of size=" << m_recvSize);
 
+  Ptr<Packet> outPkt = Create<Packet> ();
+
   if (extractSize == 0)
     {
-      return 0;
+      return outPkt;
     }
-
-  Ptr<Packet> outPkt = Create<Packet> ();
 
   QuicSocketRxPacketList::iterator it = m_socketRecvList.begin ();
 
@@ -144,13 +144,13 @@ QuicSocketRxBuffer::Extract (uint32_t maxSize)
 
       if (currentPacket->GetSize () + outPkt->GetSize () <= extractSize)   // Merge
         {
-
-          outPkt->AddAtEnd ((*it));
+          uint32_t pktSize = currentPacket->GetSize ();
+          outPkt->AddAtEnd (currentPacket);
           m_socketRecvList.erase (it);
 
-          m_recvSize -= (*it)->GetSize ();
-          extractSize -= (*it)->GetSize ();
-          NS_LOG_LOGIC ("Added packet of size " << (*it)->GetSize ());
+          m_recvSize -= pktSize;
+          extractSize -= pktSize;
+          NS_LOG_LOGIC ("Added packet of size " << pktSize);
           continue;
         }
       else
@@ -164,7 +164,6 @@ QuicSocketRxBuffer::Extract (uint32_t maxSize)
   if (outPkt->GetSize () == 0)
     {
       NS_LOG_LOGIC ("Nothing extracted.");
-      return 0;
     }
   NS_LOG_INFO (
     "Extracted " << outPkt->GetSize () << " bytes from QuicSocketRxBuffer. New buffer size=" << m_recvSize);

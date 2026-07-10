@@ -180,15 +180,9 @@ QuicSocketTxScheduler::AddScheduleItem (Ptr<QuicSocketTxScheduleItem> item, bool
   m_appSize += item->GetItem ()->m_packet->GetSize ();
   QuicSubheader qsb;
   item->GetItem ()->m_packet->PeekHeader (qsb);
-  NS_LOG_INFO ("Adding packet on stream " << qsb.GetStreamId () << " with priority " << item->GetPriority ());
-  if (!retx)
-    {
-      NS_LOG_INFO ("Standard item, add at end (offset " << qsb.GetOffset () << ")");
-    }
-  else
-    {
-      NS_LOG_INFO ("Retransmitted item, add at beginning (offset " << qsb.GetOffset () << ")");
-    }
+  NS_LOG_INFO ("Adding packet on stream " << qsb.GetStreamId () 
+               << " with priority " << item->GetPriority ()
+               << (retx ? " [RETX]" : ""));
 }
 
 Ptr<QuicSocketTxItem>
@@ -201,12 +195,12 @@ QuicSocketTxScheduler::GetNewSegment (uint32_t numBytes)
   Ptr<QuicSocketTxItem> currentItem = 0;
   Ptr<QuicSocketTxItem> outItem = CreateObject<QuicSocketTxItem>();
   outItem->m_isStream = true;   // Packets sent with this method are always stream packets
-  outItem->m_isStream0 = false;
+  outItem->m_isCrypto = false;
   outItem->m_packet = Create<Packet> ();
   uint32_t outItemSize = 0;
 
 
-  while (m_appSize > 0 && outItemSize < numBytes)
+  while (!m_appList.empty() && outItemSize < numBytes)
     {
       Ptr<QuicSocketTxScheduleItem> scheduleItem = m_appList.top ();
       currentItem = scheduleItem->GetItem ();

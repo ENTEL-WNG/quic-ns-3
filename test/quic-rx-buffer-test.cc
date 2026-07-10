@@ -70,6 +70,11 @@ private:
    */
   void
   TestStreamExtract ();
+  /**
+   * \brief Test FIN bit handling - stream termination (RFC 9000 §19.8)
+   */
+  void
+  TestStreamFin ();
 };
 
 QuicRxBufferTestCase::QuicRxBufferTestCase () :
@@ -80,41 +85,16 @@ QuicRxBufferTestCase::QuicRxBufferTestCase () :
 void
 QuicRxBufferTestCase::DoRun ()
 {
-  /*
-   * Test the insertion of packets in the Socket RX buffer:
-   * -> add packets till socket tx buffer overflow
-   * -> check correctness of buffer application size and available size
-   * -> checking availability count
-   */
+  // RFC 9000 §2.2: Test receive buffer capacity enforcement
   TestSocketAdd ();
-
-  /*
-   * Test the extraction of packets from the Socket RX buffer
-   * -> add 3 packets
-   * -> extract all packets and test that the buffer is empty
-   * -> check correctness of buffer application size and available size
-   * -> checking availability count
-   */
   TestSocketExtract ();
 
-  /*
-   * Test the insertion of packets in the Stream RX buffer:
-   * -> add packets till stream tx buffer overflow
-   * -> check correctness of buffer application size and available size
-   * -> checking availability count
-   * -> check in-order buffer insertion and duplicate packets
-   * -> check FIN functionality
-   */
+  // RFC 9000 §2.2: Test in-order delivery, duplicate rejection, gap filling
   TestStreamAdd ();
-
-  /*
-   * Test the extraction of packets from the Stream RX buffer:
-   * -> add 3 packets
-   * -> extract first 2 packets and readd them again
-   * -> extract all packets and test that the buffer is empty
-   * -> check correctness of buffer application size and available size
-   */
   TestStreamExtract ();
+
+  // RFC 9000 §19.8: Test FIN bit (stream termination)
+  TestStreamFin ();
 }
 
 void
@@ -359,6 +339,51 @@ QuicRxBufferTestCase::TestStreamExtract ()
   NS_TEST_ASSERT_MSG_NE(!outPkt, true, "Failed to extract packets");
   NS_TEST_ASSERT_MSG_EQ(rxBuf.Available (), 18000, "Wrong available data size");
   NS_TEST_ASSERT_MSG_EQ(rxBuf.Size (), 0, "Wrong buffer size");
+}
+
+void
+QuicRxBufferTestCase::TestStreamFin ()
+{
+  // RFC 9000 §19.8: A STREAM frame with the FIN bit set indicates the final
+  // size of the stream. The receiver must accept it and treat the stream as
+  // half-closed (remote) once the FIN is received.
+
+  QuicStreamRxBuffer rxBuf;
+  rxBuf.SetMaxBufferSize (18000);
+
+  Ptr<Packet> p = Create<Packet> (1200);
+
+  // Normal data frame (FIN=false)
+  QuicSubheader sub = QuicSubheader::CreateStreamSubHeader (1, 0, p->GetSize (),
+                                                            false, true, false);
+  sub.SetOffset (0);
+  bool ok = rxBuf.Add (p, sub);
+  NS_TEST_ASSERT_MSG_EQ (ok, true, "Should accept non-FIN data frame");
+
+  // FIN frame at the end of data (FIN=true, marks stream end)
+  Ptr<Packet> finPkt = Create<Packet> (1200);
+  QuicSubheader finSub = QuicSubheader::CreateStreamSubHeader (1, 1200, finPkt->GetSize (),
+                                                               true, true, false);
+  finSub.SetOffset (1200);
+  ok = rxBuf.Add (finPkt, finSub);
+  NS_TEST_ASSERT_MSG_EQ (ok, true, "Should accept FIN-bearing frame");
+
+  // Buffer should now contain both packets
+  NS_TEST_ASSERT_MSG_EQ (rxBuf.Size (), 2400, "Buffer should hold both data and FIN frame data");
+
+  // Deliverable data should cover both frames
+  std::pair<uint64_t, uint64_t> deliverable = rxBuf.GetDeliverable (0);
+  NS_TEST_ASSERT_MSG_EQ (deliverable.second, 2400,
+                         "All data including FIN frame should be deliverable");
+
+  // Duplicate FIN at same offset must be rejected
+  Ptr<Packet> dupFin = Create<Packet> (1200);
+  QuicSubheader dupSub = QuicSubheader::CreateStreamSubHeader (1, 1200, dupFin->GetSize (),
+                                                               true, true, false);
+  dupSub.SetOffset (1200);
+  bool dup = rxBuf.Add (dupFin, dupSub);
+  NS_TEST_ASSERT_MSG_EQ (dup, false, "Duplicate FIN frame at same offset must be rejected");
+  NS_TEST_ASSERT_MSG_EQ (rxBuf.Size (), 2400, "Buffer size unchanged after duplicate FIN");
 }
 
 void

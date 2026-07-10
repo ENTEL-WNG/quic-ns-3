@@ -74,7 +74,7 @@ QuicEchoClient::GetTypeId (void)
                    MakeUintegerChecker<uint32_t> ())
     .AddAttribute ("StreamId",
                    "Identifier of the stream to be used in the QUIC connection",
-                   UintegerValue (2),
+                   UintegerValue (0),
                    MakeUintegerAccessor (&QuicEchoClient::GetStreamId,
                                          &QuicEchoClient::SetStreamId),
                    MakeUintegerChecker<uint32_t> ())
@@ -500,7 +500,6 @@ void
 QuicEchoClient::SetStreamId (uint32_t streamId)
 {
   NS_LOG_FUNCTION (this << streamId);
-  NS_ABORT_MSG_IF (streamId == 0, "Stream 0 cannot be used for application data");
 
   m_streamId = streamId;
 }

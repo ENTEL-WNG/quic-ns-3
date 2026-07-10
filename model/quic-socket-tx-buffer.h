@@ -34,10 +34,12 @@
 #include "ns3/tcp-socket-base.h"
 #include "ns3/data-rate.h"
 #include "quic-socket-tx-scheduler.h"
+#include "quic-socket.h"
 
 namespace ns3 {
 
 class QuicSocketState;
+class QuicSocketBase;
 
 struct RateSample
 {
@@ -56,10 +58,11 @@ struct RateSample
   uint8_t m_ackBytesMaxWin { 0 };
 };
 
+
 /**
  * \ingroup quic
  *
- * \brief Item that encloses the application packet and some flags for it
+ * \brief Item that uses the application packet and some flags for it
  */
 class QuicSocketTxItem : public Object
 {
@@ -72,6 +75,17 @@ public:
 
   QuicSocketTxItem ();
   QuicSocketTxItem (const QuicSocketTxItem &other);
+
+  /**
+   * \brief Get the payload size of the STREAM frame.
+   *
+   * This method returns the payload size specifically for STREAM frames.
+   * If the QuicSocketTxItem does not represent a STREAM frame (i.e., m_isStream is false),
+   * it returns 0 as non-STREAM frames do not count towards flow control in this context.
+   *
+   * \return The payload size of the STREAM frame in bytes, or 0 if it's not a STREAM frame.
+   */
+  uint32_t GetStreamPayloadSize () const;
 
   /**
    * \brief Merge two QuicSocketTxItem
@@ -95,23 +109,26 @@ public:
    */
   void Print (std::ostream &os) const;
 
-  Ptr<Packet> m_packet;              //!< packet associated to this QuicSocketTxItem
-  SequenceNumber32 m_packetNumber;        //!< sequence number
-  bool m_lost;                            //!< true if the packet is lost
-  bool m_retrans;                         //!< true if it is a retx
-  bool m_sacked;                          //!< true if already acknowledged
-  bool m_acked;                       //!< true if already passed to the application
-  bool m_isStream;                    //!< true for frames of a stream (not control)
-  bool m_isStream0;                       //!< true for a frame from stream 0
-  Time m_lastSent;                        //!< time at which it was sent
-  Time m_ackTime;       //!< time at which the packet was first acked (if m_sacked is true)
-  Time m_generated;       //!< expiration deadline for the TX item
+  Ptr<Packet> m_packet;                           //!< packet associated to this QuicSocketTxItem
+  SequenceNumber32 m_packetNumber;                //!< sequence number
+  PacketNumberSpace m_space { APPLICATION_DATA }; //!< Packet number space
+  bool m_lost;                                    //!< true if the packet is lost
+  bool m_retrans;                                 //!< true if it is a retx
+  bool m_sacked;                                  //!< true if already acknowledged
+  bool m_acked;                                   //!< true if already passed to the application
+  bool m_isStream;                                //!< true if the packet contains STREAM frames (application data)
+  bool m_isCrypto;                                //!< true if the packet contains CRYPTO frames (handshake data)
+  Time m_lastSent;                                //!< time at which it was sent
+  Time m_ackTime;                                 //!< time at which the packet was first acked (if m_sacked is true)
+  Time m_generated;                               //!< expiration deadline for the TX item
 
-  uint64_t m_delivered { 0 };       //!< Connection's delivered data at the time the packet was sent
-  Time m_deliveredTime { Time::Max () };      //!< Connection's delivered time at the time the packet was sent
-  Time m_firstSentTime { Seconds (0) };      //!< Connection's first sent time at the time the packet was sent
-  bool m_isAppLimited { false };       //!< Connection's app limited at the time the packet was sent
-  uint32_t m_ackBytesSent { 0 };       //!< Connection's ACK-only bytes sent at the time the packet was sent
+  uint64_t m_delivered;                           //!< Connection's delivered data at the time the packet was sent
+  Time m_deliveredTime;                           //!< Connection's delivered time at the time the packet was sent
+  Time m_firstSentTime;                           //!< Connection's first sent time at the time the packet was sent
+  bool m_isAppLimited;                            //!< Connection's app limited at the time the packet was sent
+  uint32_t m_ackBytesSent;                        //!< Connection's ACK-only bytes sent at the time the packet was sent
+  uint32_t m_wireBytes;                           //!< Full wire size (including headers)
+  uint32_t m_payloadBytes;                        //!< Total STREAM frame payload bytes within this packet.
 };
 
 /**
@@ -146,7 +163,7 @@ public:
    * \param p a smart pointer to a packet
    * \return true if the insertion was successful
    */
-  bool Add (Ptr<Packet> p);
+  bool Add (Ptr<Packet> p, PacketNumberSpace space = APPLICATION_DATA);
 
   /**
    * \brief Request the next packet to transmit
@@ -155,15 +172,16 @@ public:
    * \param seq the sequence number of the next packet to transmit
    * \return the next packet to transmit
    */
-  Ptr<Packet> NextSequence (uint32_t numBytes, const SequenceNumber32 seq);
+  Ptr<Packet> NextSequence (uint32_t numBytes, const SequenceNumber32 seq, PacketNumberSpace space);
 
   /**
    * \brief Get a block of data not transmitted yet and move it into SentList
    *
    * \param numBytes number of bytes of the QuicSocketTxItem requested
+   * \param space the packet number space
    * \return the item that contains the right packet
    */
-  Ptr<QuicSocketTxItem> GetNewSegment (uint32_t numBytes);
+  Ptr<QuicSocketTxItem> GetNewSegment (uint32_t numBytes, PacketNumberSpace space);
 
   /**
    * Process an acknowledgment, set the packets in the send buffer as acknowledged, mark
@@ -181,7 +199,8 @@ public:
   std::vector<Ptr<QuicSocketTxItem> > OnAckUpdate (Ptr<TcpSocketState> tcb,
                                                    const uint32_t largestAcknowledged,
                                                    const std::vector<uint32_t> &additionalAckBlocks,
-                                                   const std::vector<uint32_t> &gaps);
+                                                   const std::vector<uint32_t> &gaps,
+                                                   PacketNumberSpace space);
 
   /**
    * Get the max size of the buffer
@@ -202,7 +221,7 @@ public:
    *
    * \return a vector containing the packets marked as lost
    */
-  std::vector<Ptr<QuicSocketTxItem> > DetectLostPackets ();
+  std::vector<Ptr<QuicSocketTxItem> > DetectLostPackets (Ptr<TcpSocketState> tcb, PacketNumberSpace space);
 
   /**
    * \brief Count the amount of lost bytes
@@ -226,27 +245,42 @@ public:
   uint32_t AppSize (void) const;
 
   /**
-   * \brief Return total bytes in flight
+   * \brief Return total bytes in flight (all retransmittable packets)
    *
    * \returns total bytes in flight
    */
   uint32_t BytesInFlight () const;
+  uint32_t BytesInFlight (PacketNumberSpace space) const;
 
   /**
-   * Return the number of frames for stream 0 is in the buffer
+   * \brief Return bytes in flight subject to congestion control (excluding Initial/Handshake)
    *
-   * \return the number of frames for stream 0 is in the buffer
+   * \returns congestion controlled bytes in flight
    */
-  uint32_t GetNumFrameStream0InBuffer (void) const;
+  uint32_t GetCongestionControlledBytesInFlight () const;
 
   /**
-   * Return the next frame for stream 0 to be sent
+    * \brief Return bytes in flight for Handshake/Initial packets
+    *
+    * \returns handshake bytes in flight
+    */
+  uint32_t GetHandshakeInFlight () const;
+
+  /**
+   * Return the number of CRYPTO frames in the buffer
+   *
+   * \return the number of CRYPTO frames in the buffer
+   */
+  uint32_t GetNumCryptoFramesInBuffer (PacketNumberSpace space) const;
+
+  /**
+   * Return the next CRYPTO frame to be sent
    * and add this packet to the sent list
    *
    * \param seq the sequence number of the packet
-   * \return a smart pointer to the packet, 0 if there are no packets from stream 0
+   * \return a smart pointer to the packet, 0 if there are no CRYPTO frames
    */
-  Ptr<Packet> NextStream0Sequence (const SequenceNumber32 seq);
+  Ptr<Packet> NextCryptoSequence (const SequenceNumber32 seq, PacketNumberSpace space);
 
   /**
    * \brief Reset the sent list
@@ -265,14 +299,14 @@ public:
    * \param the sequence number of the packet
    * \return true if the packet is in the send buffer
    */
-  bool MarkAsLost (const SequenceNumber32 seq);
+  bool MarkAsLost (const SequenceNumber32 seq, PacketNumberSpace space);
 
   /**
    * Put the lost packets at the beginning of the application buffer to retransmit them
    * \param the sequence number of the retransmitted packet
    * \return the number of lost bytes
    */
-  uint32_t Retransmission (SequenceNumber32 packetNumber);
+  uint32_t Retransmission (SequenceNumber32 packetNumber, PacketNumberSpace space);
 
   /**
    * Set the TcpSocketState (tcb)
@@ -287,18 +321,30 @@ public:
   void SetScheduler (Ptr<QuicSocketTxScheduler> sched);
 
   /**
+   * Set the QuicSocketBase
+   * \param The socket object
+   */
+  void SetSocket (Ptr<QuicSocketBase> socket);
+
+  /**
    * Updates per packet variables required for rate sampling on each packet transmission
    * \param The sequence number of the sent packet
    * \param The size of the sent packet
    */
-  void UpdatePacketSent (SequenceNumber32 seq, uint32_t sz);
+  void UpdatePacketSent (SequenceNumber32 seq, uint32_t sz, PacketNumberSpace space);
 
   /**
    * Updates ACK related variables required by RateSample to discount the delivery rate.
    * \param The sequence number of the sent ACK packet
    * \param The size of the sent ACK packet
    */
-  void UpdateAckSent (SequenceNumber32 seq, uint32_t sz);
+  void UpdateAckSent (SequenceNumber32 seq, uint32_t sz, PacketNumberSpace space);
+
+  /**
+   * \brief Discard all packets in a packet number space
+   * \param space the packet number space
+   */
+  void DiscardSpace (PacketNumberSpace space);
 
   /**
    * Get the current rate sample
@@ -349,25 +395,36 @@ public:
    */
   Time GetDefaultLatency ();
 
+    /**
+   * \brief Return the total number of STREAM payload bytes in flight.
+   *
+   * This method calculates the sum of payload bytes for all packets
+   * that have been sent but not yet acknowledged and are not marked as lost.
+   * This value represents the amount of application data currently awaiting
+   * acknowledgment.
+   *
+   * \return The total number of payload bytes in flight.
+   */
+  uint32_t GetPayloadBytesInFlight () const;
+
 private:
   typedef std::list<Ptr<QuicSocketTxItem> > QuicTxPacketList;      //!< container for data stored in the buffer
 
   /**
    * Discard acknowledged data from the sent list
    */
-  void CleanSentList ();
+  void CleanSentList (PacketNumberSpace space);
 
-
-
-  QuicTxPacketList m_sentList;        //!< List of sent packets with additional info
-  QuicTxPacketList m_streamZeroList;       //!< List of waiting stream 0 packets with additional info
-  uint32_t m_maxBuffer;            //!< Max number of data bytes in buffer (SND.WND)
-  uint32_t m_streamZeroSize;       //!< Size of all stream 0 data in the application list
-  uint32_t m_sentSize;                       //!< Size of all data in the sent list
-  uint32_t m_numFrameStream0InBuffer;        //!< Number of Stream 0 frames buffered
+  QuicTxPacketList m_sentList[3];        //!< List of sent packets with additional info per space
+  QuicTxPacketList m_cryptoList[3];      //!< List of waiting CRYPTO frame packets with additional info per space (only 0 and 1 used)
+  uint32_t m_maxBuffer;                  //!< Max number of data bytes in buffer (SND.WND)
+  uint32_t m_cryptoSize;                 //!< Size of all CRYPTO frame data in the buffer
+  uint32_t m_sentSize;                   //!< Total wire size of all packets currently in the sent list.
+  uint32_t m_numCryptoFramesInBuffer;    //!< Number of CRYPTO frames buffered
 
   Ptr<QuicSocketTxScheduler> m_scheduler { nullptr };         //!< Scheduler
   Ptr<QuicSocketState> m_tcb { nullptr };
+  Ptr<QuicSocketBase> m_socket { nullptr };
   struct RateSample m_rs;
 };
 

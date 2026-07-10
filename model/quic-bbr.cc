@@ -24,8 +24,8 @@
 
 #include "quic-bbr.h"
 #include "ns3/log.h"
-#include "ns3/quic-socket-base.h"
-#include "ns3/quic-socket-tx-buffer.h"
+#include "quic-socket-base.h"
+#include "quic-socket-tx-buffer.h"
 #include "ns3/simulator.h"
 
 namespace ns3 {
@@ -146,15 +146,14 @@ QuicBbr::InitPacingRate (Ptr<QuicSocketState> tcb)
       NS_LOG_WARN ("BBR must use pacing");
       tcb->m_pacing = true;
     }
-  Time rtt = tcb->m_lastRtt != Time::Max () ? tcb->m_lastRtt.Get () : MilliSeconds (1);
-  if (rtt == Seconds (0))
+  Time rtt = tcb->m_lastRtt;
+  if (rtt == Time::Max () || rtt == Seconds (0))
     {
-      NS_LOG_INFO ("No rtt estimate is available, using kDefaultInitialRtt=" << tcb->m_kDefaultInitialRtt);
-      rtt = tcb->m_kDefaultInitialRtt;
+      NS_LOG_INFO ("No rtt estimate is available, using kInitialRtt=" << tcb->m_kInitialRtt);
+      rtt = tcb->m_kInitialRtt;
     }
   DataRate nominalBandwidth (tcb->m_initialCWnd * 8 / rtt.GetSeconds ());
   tcb->m_pacingRate = DataRate (m_pacingGain * nominalBandwidth.GetBitRate ());
-
 }
 
 void
@@ -713,7 +712,10 @@ QuicBbr::OnPacketSent (Ptr<TcpSocketState> tcb, SequenceNumber32 packetNumber, b
   Ptr<QuicSocketState> tcbd = dynamic_cast<QuicSocketState *> (&(*tcb));
   NS_ASSERT_MSG (tcbd, "tcb is not a QuicSocketState");
 
-  tcbd->m_timeOfLastSentPacket = Now ();
+  if (!isAckOnly)
+    {
+      tcbd->m_timeOfLastSentAckElicitingPacket = Now ();
+    }
   tcbd->m_highTxMark = packetNumber;
 }
 
@@ -723,6 +725,10 @@ QuicBbr::OnAckReceived (Ptr<TcpSocketState> tcb, QuicSubheader &ack,
                         const struct RateSample *rs)
 {
   NS_LOG_FUNCTION (this);
+  if (newAcks.empty ())
+    {
+      return;
+    }
 
   Ptr<QuicSocketState> tcbd = dynamic_cast<QuicSocketState *> (&(*tcb));
   NS_ASSERT_MSG (tcbd, "tcb is not a QuicSocketState");
@@ -789,28 +795,9 @@ QuicBbr::OnPacketAcked (Ptr<TcpSocketState> tcb, Ptr<QuicSocketTxItem> ackedPack
   Ptr<QuicSocketState> tcbd = dynamic_cast<QuicSocketState*> (&(*tcb));
   NS_ASSERT_MSG (tcbd, "tcb is not a QuicSocketState");
 
-  NS_LOG_LOGIC ("Handle possible RTO");
-  // If a packet sent prior to RTO was acked, then the RTO  was spurious. Otherwise, inform congestion control.
-  if (tcbd->m_rtoCount > 0
-      and ackedPacket->m_packetNumber > tcbd->m_largestSentBeforeRto)
-    {
-      OnRetransmissionTimeoutVerified (tcb);
-    }
   tcbd->m_handshakeCount = 0;
-  tcbd->m_tlpCount = 0;
-  tcbd->m_rtoCount = 0;
 }
 
-void
-QuicBbr::OnRetransmissionTimeoutVerified (Ptr<TcpSocketState> tcb)
-{
-  NS_LOG_FUNCTION (this);
-  Ptr<QuicSocketState> tcbd = dynamic_cast<QuicSocketState*> (&(*tcb));
-  NS_ASSERT_MSG (tcbd, "tcb is not a QuicSocketState");
-  NS_LOG_INFO ("Loss state");
-  tcbd->m_congState = TcpSocketState::CA_LOSS;
-  CongestionStateSet (tcbd, TcpSocketState::CA_LOSS);
-}
 
 Ptr<TcpCongestionOps>
 QuicBbr::Fork (void)
