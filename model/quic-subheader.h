@@ -318,6 +318,22 @@ public:
   static QuicSubheader CreateNewConnectionId (uint64_t sequence, uint64_t connectionId, const uint8_t token[16]);
 
   /**
+   * Create a Retire Connection Id subheader
+   *
+   * \param sequence the sequence number of the connection ID being retired
+   * \return the generated QuicSubheader
+   */
+  static QuicSubheader CreateRetireConnectionId (uint64_t sequence);
+
+  /**
+   * Create a New Token subheader
+   *
+   * \param token the opaque token blob
+   * \return the generated QuicSubheader
+   */
+  static QuicSubheader CreateNewToken (const std::vector<uint8_t>& token);
+
+  /**
    * Create a Stop Sending subheader
    *
    * \param streamId the stream id of the stream being ignored
@@ -627,6 +643,18 @@ public:
   void GetStatelessResetToken (uint8_t token[16]) const;
 
   /**
+   * \brief Get the NEW_TOKEN token
+   * \return The token for this QuicSubheader
+   */
+  const std::vector<uint8_t>& GetToken () const;
+
+  /**
+   * \brief Set the NEW_TOKEN token
+   * \param token the token for this QuicSubheader
+   */
+  void SetToken (const std::vector<uint8_t>& token);
+
+  /**
    * \brief Check if the subheader is Padding
    * \return true if the subheader is Padding, false otherwise
    */
@@ -697,6 +725,18 @@ public:
    * \return true if the subheader is New Connection Id, false otherwise
    */
   bool IsNewConnectionId () const;
+
+  /**
+   * \brief Check if the subheader is Retire Connection Id
+   * \return true if the subheader is Retire Connection Id, false otherwise
+   */
+  bool IsRetireConnectionId () const;
+
+  /**
+   * \brief Check if the subheader is New Token
+   * \return true if the subheader is New Token, false otherwise
+   */
+  bool IsNewToken () const;
 
   /**
    * \brief Check if the subheader is Stop Sending
@@ -785,6 +825,7 @@ private:
   std::vector<uint32_t> m_gaps;                 //!< Gaps vector
   uint64_t m_data;                               //!< Data word
   uint64_t m_length;                            //!< Length
+  std::vector<uint8_t> m_token;                 //!< NEW_TOKEN token
 };
 
 } // namespace ns3

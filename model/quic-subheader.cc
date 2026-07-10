@@ -206,6 +206,11 @@ QuicSubheader::CalculateSubHeaderLength () const
         len += GetVarInt64Size (m_length);
         break;
 
+      case NEW_TOKEN: // RFC 9000 Section 19.7
+        len += GetVarInt64Size (m_token.size ());
+        len += (m_token.size () * 8);
+        break;
+
       case ACK:     // RFC 9000 Section 19.3
       case ACK_ECN: // RFC 9000 Section 19.3.2
         len += GetVarInt64Size (m_largestAcknowledged);
@@ -335,6 +340,14 @@ QuicSubheader::Serialize (Buffer::Iterator start) const
       case CRYPTO:
         WriteVarInt64 (i, m_offset);
         WriteVarInt64 (i, m_length);
+        break;
+
+      case NEW_TOKEN:
+        WriteVarInt64 (i, m_token.size ());
+        for (auto& elem : m_token)
+          {
+            i.WriteU8 (elem);
+          }
         break;
 
       case ACK:
@@ -470,6 +483,17 @@ QuicSubheader::Deserialize (Buffer::Iterator start)
         m_length = ReadVarInt64 (i);
         break;
 
+      case NEW_TOKEN:
+        {
+          uint64_t tokenLen = ReadVarInt64 (i);
+          m_token.clear ();
+          for (uint64_t j = 0; j < tokenLen; j++)
+            {
+              m_token.push_back (i.ReadU8 ());
+            }
+        }
+        break;
+
       case ACK:
       case ACK_ECN:
         m_largestAcknowledged = ReadVarInt64 (i);
@@ -596,6 +620,10 @@ QuicSubheader::Print (std::ostream &os) const
       case CRYPTO:
         os << "|Offset " << m_offset << "|\n";
         os << "|Length " << m_length << "|\n";
+        break;
+
+      case NEW_TOKEN:
+        os << "|Token Length " << m_token.size () << "|\n";
         break;
 
       case ACK:
@@ -737,6 +765,18 @@ bool
 QuicSubheader::IsNewConnectionId () const
 {
   return m_frameType == NEW_CONNECTION_ID;
+}
+
+bool
+QuicSubheader::IsRetireConnectionId () const
+{
+  return m_frameType == RETIRE_CONNECTION_ID;
+}
+
+bool
+QuicSubheader::IsNewToken () const
+{
+  return m_frameType == NEW_TOKEN;
 }
 
 bool
@@ -1090,6 +1130,30 @@ QuicSubheader::CreateNewConnectionId (uint64_t sequence, uint64_t connectionId, 
 }
 
 QuicSubheader
+QuicSubheader::CreateRetireConnectionId (uint64_t sequence)
+{
+  NS_LOG_INFO ("Created RetireConnectionId Header");
+
+  QuicSubheader sub;
+  sub.SetFrameType (RETIRE_CONNECTION_ID);
+  sub.SetSequence (sequence);
+
+  return sub;
+}
+
+QuicSubheader
+QuicSubheader::CreateNewToken (const std::vector<uint8_t>& token)
+{
+  NS_LOG_INFO ("Created NewToken Header");
+
+  QuicSubheader sub;
+  sub.SetFrameType (NEW_TOKEN);
+  sub.SetToken (token);
+
+  return sub;
+}
+
+QuicSubheader
 QuicSubheader::CreateStopSending (uint64_t streamId, uint16_t applicationErrorCode)
 {
   NS_LOG_INFO ("Created StopSending Header");
@@ -1415,6 +1479,18 @@ void QuicSubheader::GetStatelessResetToken (uint8_t token[16]) const
 void QuicSubheader::SetStatelessResetToken (const uint8_t token[16])
 {
   for (int i = 0; i < 16; i++) m_statelessResetToken[i] = token[i];
+}
+
+const std::vector<uint8_t>&
+QuicSubheader::GetToken () const
+{
+  return m_token;
+}
+
+void
+QuicSubheader::SetToken (const std::vector<uint8_t>& token)
+{
+  m_token = token;
 }
 
 uint64_t QuicSubheader::GetFirstAckBlock () const

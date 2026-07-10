@@ -2082,6 +2082,16 @@ QuicSocketBase::OnReceivedFrame (Ptr<Packet> p, QuicSubheader &sub, PacketNumber
       NS_LOG_INFO ("Received NEW_CONNECTION_ID frame: Seq " << sub.GetSequence () << " CID " << sub.GetConnectionId ());
       // TODO: Store alternative connection IDs for path migration
     }
+  else if (sub.GetFrameType () == QuicSubheader::RETIRE_CONNECTION_ID)
+    {
+      NS_LOG_INFO ("Received RETIRE_CONNECTION_ID frame: Seq " << sub.GetSequence ());
+      // TODO: Retire the referenced local connection ID once a CID pool is tracked
+    }
+  else if (sub.GetFrameType () == QuicSubheader::NEW_TOKEN)
+    {
+      NS_LOG_INFO ("Received NEW_TOKEN frame: Token Length " << sub.GetToken ().size ());
+      // RFC 9000 Section 19.7: Informational only; no 0-RTT token cache is maintained
+    }
   else if (sub.GetFrameType () == QuicSubheader::PATH_CHALLENGE)
     {
       NS_LOG_INFO ("Received PATH_CHALLENGE frame with data " << sub.GetData ());

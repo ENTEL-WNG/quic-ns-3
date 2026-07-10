@@ -242,6 +242,18 @@ public:
   bool GetDisableActiveMigration () const;
 
   /**
+   * \brief Get the active connection ID limit
+   * \return The active connection ID limit for this QuicTransportParameters
+   */
+  uint32_t GetActiveConnectionIdLimit () const;
+
+  /**
+   * \brief Set the active connection ID limit
+   * \param activeConnectionIdLimit the maximum number of active connection IDs the peer will store
+   */
+  void SetActiveConnectionIdLimit (uint32_t activeConnectionIdLimit);
+
+  /**
    * \brief Set the initial source connection ID
    * \param cid the connection ID
    */
@@ -302,6 +314,7 @@ private:
   uint8_t m_ack_delay_exponent;           //!< The exponent used to decode the ack delay field in the ACK frame
   uint16_t m_max_ack_delay;               //!< The maximum amount of time in milliseconds by which the endpoint will delay sending acknowledgments
   uint32_t m_initial_max_stream_id_uni;   //!< The initial maximum number of application-owned unidirectional streams the peer may initiate
+  uint32_t m_activeConnectionIdLimit;     //!< The maximum number of active connection IDs the endpoint is willing to store
   bool m_disableActiveMigration = false;  //!< If true, the endpoint does not support migration
   uint64_t m_initialSourceConnectionId = 0;
   bool m_hasInitialSourceConnectionId = false;

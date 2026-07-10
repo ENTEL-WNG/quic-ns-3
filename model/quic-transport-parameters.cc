@@ -44,6 +44,7 @@ QuicTransportParameters::QuicTransportParameters ()
   m_ack_delay_exponent (3),
   m_max_ack_delay (25),
   m_initial_max_stream_id_uni (0),
+  m_activeConnectionIdLimit (2),
   m_disableActiveMigration (false),
   m_hasInitialSourceConnectionId (false),
   m_hasOriginalDestinationConnectionId (false),
@@ -98,6 +99,7 @@ QuicTransportParameters::CalculateHeaderLength () const
   len += paramLen (m_ack_delay_exponent);
   len += paramLen (m_max_ack_delay);
   len += paramLen (m_initial_max_stream_id_uni);
+  len += paramLen (m_activeConnectionIdLimit);
 
   if (m_disableActiveMigration)
     {
@@ -175,6 +177,7 @@ QuicTransportParameters::Serialize (Buffer::Iterator start) const
   writeParam (ACK_DELAY_EXPONENT, m_ack_delay_exponent);
   writeParam (MAX_ACK_DELAY, m_max_ack_delay);
   writeParam (INITIAL_MAX_STREAMS_UNI, m_initial_max_stream_id_uni);
+  writeParam (ACTIVE_CONNECTION_ID_LIMIT, m_activeConnectionIdLimit);
 
   if (m_disableActiveMigration)
   {
@@ -249,6 +252,7 @@ QuicTransportParameters::Deserialize (Buffer::Iterator start)
       case ACK_DELAY_EXPONENT: m_ack_delay_exponent = (uint8_t)val; break;
       case MAX_ACK_DELAY: m_max_ack_delay = (uint16_t)val; break;
       case INITIAL_MAX_STREAMS_UNI: m_initial_max_stream_id_uni = (uint32_t)val; break;
+      case ACTIVE_CONNECTION_ID_LIMIT: m_activeConnectionIdLimit = (uint32_t)val; break;
       case STATELESS_RESET_TOKEN: m_hasStatelessResetToken = true; break;
       case DISABLE_ACTIVE_MIGRATION: m_disableActiveMigration = true; break;
       case ORIGINAL_DESTINATION_CONNECTION_ID: 
@@ -284,6 +288,7 @@ QuicTransportParameters::Print (std::ostream &os) const
   os << "|ack_delay_exponent " << (uint16_t)m_ack_delay_exponent << "|\n";
   os << "|max_ack_delay " << m_max_ack_delay << "|\n";
   os << "|initial_max_stream_id_uni " << m_initial_max_stream_id_uni << "|\n";
+  os << "|active_connection_id_limit " << m_activeConnectionIdLimit << "|\n";
   os << "|disable_active_migration " << m_disableActiveMigration << "]\n";
 }
 
@@ -318,6 +323,7 @@ operator== (const QuicTransportParameters &lhs, const QuicTransportParameters &r
     && lhs.m_ack_delay_exponent == rhs.m_ack_delay_exponent
     && lhs.m_max_ack_delay == rhs.m_max_ack_delay
     && lhs.m_initial_max_stream_id_uni == rhs.m_initial_max_stream_id_uni
+    && lhs.m_activeConnectionIdLimit == rhs.m_activeConnectionIdLimit
     && lhs.m_hasStatelessResetToken == rhs.m_hasStatelessResetToken
     && lhs.m_disableActiveMigration == rhs.m_disableActiveMigration
     );
@@ -344,6 +350,8 @@ uint32_t QuicTransportParameters::GetInitialMaxStreamIdBidi () const { return m_
 void QuicTransportParameters::SetInitialMaxStreamIdBidi (uint32_t initialMaxStreamIdBidi) { m_initial_max_stream_id_bidi = initialMaxStreamIdBidi; }
 uint32_t QuicTransportParameters::GetInitialMaxStreamIdUni () const { return m_initial_max_stream_id_uni; }
 void QuicTransportParameters::SetInitialMaxStreamIdUni (uint32_t initialMaxStreamIdUni) { m_initial_max_stream_id_uni = initialMaxStreamIdUni; }
+uint32_t QuicTransportParameters::GetActiveConnectionIdLimit () const { return m_activeConnectionIdLimit; }
+void QuicTransportParameters::SetActiveConnectionIdLimit (uint32_t activeConnectionIdLimit) { m_activeConnectionIdLimit = activeConnectionIdLimit; }
 uint16_t QuicTransportParameters::GetMaxPacketSize () const { return m_max_packet_size; }
 void QuicTransportParameters::SetMaxPacketSize (uint16_t maxPacketSize) { m_max_packet_size = maxPacketSize; }
 bool QuicTransportParameters::HasStatelessResetToken () const { return m_hasStatelessResetToken; }
