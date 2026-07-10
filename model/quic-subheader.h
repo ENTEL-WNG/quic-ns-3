@@ -42,7 +42,7 @@ namespace ns3 {
  * (stream id, connection id, error code, offset, flags, etc) as well
  * as methods for serialization to and deserialization from a buffer.
  *
- * Frames and Frame Types [Quic IETF Draft 13 Transport - sec. 5]
+ * Frames and Frame Types [RFC 9000 Section 12.4]
  * --------------------------------------------------------------
  *
  * The payload of all packets, after removing packet protection, consists
@@ -74,7 +74,10 @@ namespace ns3 {
  *   |                   Type-Dependent Fields (*)                 ...
  *   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  *
- * Variable-Length Integer Encoding [Quic IETF Draft 13 Transport - sec. 7.1]
+ *   |                          Frame N (*)                        ...
+ *   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *
+ * Variable-Length Integer Encoding [RFC 9000 Section 16]
  * --------------------------------------------------------------------------
  *
  * QUIC frames commonly use a variable-length encoding for non-negative
@@ -103,34 +106,34 @@ class QuicSubheader : public Header
 {
 public:
   /**
-   * \brief Quic subheader type frame values
+   * \brief Quic subheader type frame values (RFC 9000)
    */
   typedef enum
   {
-    PADDING = 0x00,            //!< Padding
-    RST_STREAM = 0x01,         //!< Rst Stream
-    CONNECTION_CLOSE = 0x02,   //!< Connection Close
-    APPLICATION_CLOSE = 0x03,  //!< Application Close
-    MAX_DATA = 0x04,           //!< Max Data
-    MAX_STREAM_DATA = 0x05,    //!< Max Stream Data
-    MAX_STREAM_ID = 0x06,      //!< Max Stream Id
-    PING = 0x07,               //!< Ping
-    BLOCKED = 0x08,            //!< Blocked
-    STREAM_BLOCKED = 0x09,     //!< Stream Blocked
-    STREAM_ID_BLOCKED = 0x0A,  //!< Stream Id Blocked
-    NEW_CONNECTION_ID = 0x0B,  //!< New Connection Id
-    STOP_SENDING = 0x0C,       //!< Stop Sending
-    ACK = 0x0D,                //!< Ack
-    PATH_CHALLENGE = 0x0E,     //!< Path Challenge
-    PATH_RESPONSE = 0x0F,      //!< Path Response
-    STREAM000 = 0x10,          //!< Stream (offset=0, length=0, fin=0)
-    STREAM001 = 0x11,          //!< Stream (offset=0, length=0, fin=1)
-    STREAM010 = 0x12,          //!< Stream (offset=0, length=1, fin=0)
-    STREAM011 = 0x13,          //!< Stream (offset=0, length=1, fin=1)
-    STREAM100 = 0x14,          //!< Stream (offset=1, length=0, fin=0)
-    STREAM101 = 0x15,          //!< Stream (offset=1, length=0, fin=1)
-    STREAM110 = 0x16,          //!< Stream (offset=1, length=1, fin=0)
-    STREAM111 = 0x17           //!< Stream (offset=1, length=1, fin=1)
+    PADDING = 0x00,             //!< Padding
+    PING = 0x01,                //!< Ping
+    ACK = 0x02,                 //!< Ack
+    ACK_ECN = 0x03,             //!< Ack with ECN
+    RESET_STREAM = 0x04,        //!< Reset Stream
+    STOP_SENDING = 0x05,        //!< Stop Sending
+    CRYPTO = 0x06,              //!< Crypto (Handshake data)
+    NEW_TOKEN = 0x07,           //!< New Token
+    STREAM = 0x08,              //!< Stream (0x08-0x0f)
+    MAX_DATA = 0x10,            //!< Max Data
+    MAX_STREAM_DATA = 0x11,     //!< Max Stream Data
+    MAX_STREAMS_BIDI = 0x12,    //!< Max Streams (Bidirectional)
+    MAX_STREAMS_UNI = 0x13,     //!< Max Streams (Unidirectional)
+    DATA_BLOCKED = 0x14,        //!< Data Blocked
+    STREAM_DATA_BLOCKED = 0x15, //!< Stream Data Blocked
+    STREAMS_BLOCKED_BIDI = 0x16,//!< Streams Blocked (Bidirectional)
+    STREAMS_BLOCKED_UNI = 0x17, //!< Streams Blocked (Unidirectional)
+    NEW_CONNECTION_ID = 0x18,   //!< New Connection Id
+    RETIRE_CONNECTION_ID = 0x19,//!< Retire Connection Id
+    PATH_CHALLENGE = 0x1a,      //!< Path Challenge
+    PATH_RESPONSE = 0x1b,       //!< Path Response
+    CONNECTION_CLOSE = 0x1c,    //!< Connection Close (QUIC layer)
+    APPLICATION_CLOSE = 0x1d,   //!< Connection Close (Application layer)
+    HANDSHAKE_DONE = 0x1e       //!< Handshake Done
   } TypeFrame_t;
 
   /**
@@ -150,6 +153,7 @@ public:
     VERSION_NEGOTIATION_ERROR = 0x09,  // Version negotiation failure
     PROTOCOL_VIOLATION = 0x0A,         // Generic protocol violation
     UNSOLICITED_PATH_ERROR = 0x0B,     // Unsolicited PATH_RESPONSE frame
+    CRYPTO_BUFFER_EXCEEDED = 0x0D,     // Crypto buffer exceeded
     FRAME_ERROR = 0x100                // Specific frame format error [0x100-0x1FF] -> will simply use Frame Error 0x100 as a mask and summing specific TypeFrame_t
   } TransportErrorCodes_t;
 
@@ -311,7 +315,23 @@ public:
    * \param statelessResetToken the 128-bit value that will be used to for a stateless reset when the associated connection ID is used
    * \return the generated QuicSubheader
    */
-  static QuicSubheader CreateNewConnectionId (uint64_t sequence, uint64_t connectionId);     //uint128_t statelessResetToken);
+  static QuicSubheader CreateNewConnectionId (uint64_t sequence, uint64_t connectionId, const uint8_t token[16]);
+
+  /**
+   * Create a Retire Connection Id subheader
+   *
+   * \param sequence the sequence number of the connection ID being retired
+   * \return the generated QuicSubheader
+   */
+  static QuicSubheader CreateRetireConnectionId (uint64_t sequence);
+
+  /**
+   * Create a New Token subheader
+   *
+   * \param token the opaque token blob
+   * \return the generated QuicSubheader
+   */
+  static QuicSubheader CreateNewToken (const std::vector<uint8_t>& token);
 
   /**
    * Create a Stop Sending subheader
@@ -340,7 +360,7 @@ public:
    * \param data the data word of the Path Challenge subheader
    * \return the generated QuicSubheader
    */
-  static QuicSubheader CreatePathChallenge (uint8_t data);
+  static QuicSubheader CreatePathChallenge (uint64_t data);
 
   /**
    * Create a Path Response subheader
@@ -348,7 +368,23 @@ public:
    * \param data the data word of the Path Response subheader
    * \return the generated QuicSubheader
    */
-  static QuicSubheader CreatePathResponse (uint8_t data);
+  static QuicSubheader CreatePathResponse (uint64_t data);
+
+  /**
+   * Create a Crypto subheader
+   *
+   * \param offset the offset of the first byte of the frame
+   * \param length the length of the data
+   * \return the generated QuicSubheader
+   */
+  static QuicSubheader CreateCrypto (uint64_t offset, uint64_t length);
+
+  /**
+   * \brief Create a Handshake Done frame
+   *
+   * \return the created QuicSubheader
+   */
+  static QuicSubheader CreateHandshakeDone (void);
 
   /**
    * Create a Stream subheader
@@ -417,13 +453,13 @@ public:
    * \brief Get the data word
    * \return The data word for this QuicSubheader
    */
-  uint8_t GetData () const;
+  uint64_t GetData () const;
 
   /**
    * \brief Set the data word
    * \param data the data word for this QuicSubheader
    */
-  void SetData (uint8_t data);
+  void SetData (uint64_t data);
 
   /**
    * \brief Get the error code
@@ -448,6 +484,16 @@ public:
    * \param frameType the frame type for this QuicSubheader
    */
   void SetFrameType (uint8_t frameType);
+
+  /**
+   * \brief Set the frame type to Ping
+   */
+  void SetPing ();
+
+  /**
+   * \brief Set the frame type to Handshake Done
+   */
+  void SetHandshakeDone ();
 
   /**
    * \brief Get the gap vector
@@ -593,9 +639,20 @@ public:
    */
   void SetFirstAckBlock (uint64_t firstAckBlock);
 
-  // TODO: Implement Stateless Reset Token functionality
-  // uint128_t getStatelessResetToken() const;
-  // void SetStatelessResetToken(uint128_t statelessResetToken);
+  void SetStatelessResetToken (const uint8_t token[16]);
+  void GetStatelessResetToken (uint8_t token[16]) const;
+
+  /**
+   * \brief Get the NEW_TOKEN token
+   * \return The token for this QuicSubheader
+   */
+  const std::vector<uint8_t>& GetToken () const;
+
+  /**
+   * \brief Set the NEW_TOKEN token
+   * \param token the token for this QuicSubheader
+   */
+  void SetToken (const std::vector<uint8_t>& token);
 
   /**
    * \brief Check if the subheader is Padding
@@ -670,6 +727,18 @@ public:
   bool IsNewConnectionId () const;
 
   /**
+   * \brief Check if the subheader is Retire Connection Id
+   * \return true if the subheader is Retire Connection Id, false otherwise
+   */
+  bool IsRetireConnectionId () const;
+
+  /**
+   * \brief Check if the subheader is New Token
+   * \return true if the subheader is New Token, false otherwise
+   */
+  bool IsNewToken () const;
+
+  /**
    * \brief Check if the subheader is Stop Sending
    * \return true if the subheader is Stop Sending, false otherwise
    */
@@ -694,10 +763,22 @@ public:
   bool IsPathResponse () const;
 
   /**
+   * \brief Check if the subheader is Crypto
+   * \return true if the subheader is Crypto, false otherwise
+   */
+  bool IsCrypto () const;
+
+  /**
    * \brief Check if the subheader is Stream
    * \return true if the subheader is Stream, false otherwise
    */
   bool IsStream () const;
+
+  /**
+   * \brief Check if the subheader is Handshake Done
+   * \return true if the subheader is Handshake Done, false otherwise
+   */
+  bool IsHandshakeDone () const;
 
   /**
    * \brief Check if the subheader is Stream and the FIN bit is true
@@ -735,15 +816,16 @@ private:
   uint64_t m_maxStreamId;                       //!< Max stream id limit
   uint64_t m_sequence;                          //!< Sequence
   uint64_t m_connectionId;                      //!< Connection id
-  //uint128_t statelessResetToken;              //!< Stateless reset token
+  uint8_t m_statelessResetToken[16];            //!< Stateless reset token
   uint32_t m_largestAcknowledged;               //!< Largest acknowledged
   uint32_t m_ackDelay;                          //!< Ack delay
   uint32_t m_ackBlockCount;                     //!< Ack block count
   uint32_t m_firstAckBlock;                     //!< First Ack block
   std::vector<uint32_t> m_additionalAckBlocks;  //!< Additional ack blocks vector
   std::vector<uint32_t> m_gaps;                 //!< Gaps vector
-  uint8_t m_data;                               //!< Data word
+  uint64_t m_data;                               //!< Data word
   uint64_t m_length;                            //!< Length
+  std::vector<uint8_t> m_token;                 //!< NEW_TOKEN token
 };
 
 } // namespace ns3

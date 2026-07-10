@@ -204,7 +204,7 @@ QuicStreamTxBuffer::NextSequence (uint32_t numBytes, const SequenceNumber32 seq)
 
   Ptr<QuicStreamTxItem> outItem = GetNewSegment (numBytes);
 
-  if (outItem != nullptr)
+  if (outItem)
     {
       outItem->m_packetNumberSequence = seq;
       outItem->m_lastSent = Simulator::Now ();
@@ -292,12 +292,14 @@ QuicStreamTxBuffer::GetNewSegment (uint32_t numBytes)
   return outItem;
 }
 
-void
+std::vector<Ptr<QuicStreamTxItem>>
 QuicStreamTxBuffer::OnAckUpdate (const uint64_t largestAcknowledged, const std::vector<uint64_t> &additionalAckBlocks, const std::vector<uint64_t> &gaps)
 {
   NS_LOG_FUNCTION (this);
+
+  std::vector<Ptr<QuicStreamTxItem>> newlyAcked;
   std::vector<uint64_t> compAckBlocks = additionalAckBlocks;
-  std::vector<uint64_t> compGaps = additionalAckBlocks;
+  std::vector<uint64_t> compGaps = gaps;
 
   NS_LOG_INFO ("Handling Ack - highest packet " << largestAcknowledged);
   compAckBlocks.insert (compAckBlocks.begin (), largestAcknowledged);
@@ -307,23 +309,36 @@ QuicStreamTxBuffer::OnAckUpdate (const uint64_t largestAcknowledged, const std::
   std::vector<uint64_t>::const_iterator ack_it = compAckBlocks.begin ();
   std::vector<uint64_t>::const_iterator gap_it = compGaps.begin ();
 
-  for (uint64_t numAckBlockAnalyzed = 0; numAckBlockAnalyzed < ackBlockCount; numAckBlockAnalyzed++, ack_it++, gap_it++)
+  for (uint64_t n = 0; n < ackBlockCount; n++, ack_it++, gap_it++)
     {
-      for (auto sent_it = m_sentList.rbegin (); sent_it != m_sentList.rend () and !m_sentList.empty (); ++sent_it)       // Visit sentList in reverse Order for optimization
+      // Iterate through sent list to find packets in the acked range
+      auto it = m_sentList.begin();
+      while (it != m_sentList.end())
         {
-          if ((*sent_it)->m_packetNumberSequence < (SequenceNumber32)(*gap_it) )              // Just for optimization we suppose All is perfectly ordered
+          Ptr<QuicStreamTxItem> item = *it;
+          
+          if (item->m_packetNumberSequence <= (SequenceNumber32)(*ack_it) && 
+              item->m_packetNumberSequence > (SequenceNumber32)(*gap_it))
             {
-              break;
+              if (!item->m_sacked)
+                {
+                  NS_LOG_LOGIC ("Newly Acked packet " << item->m_packetNumberSequence);
+                  item->m_sacked = true;
+                  newlyAcked.push_back(item);
+                  
+                  // Decrement the sent size (Bytes In Flight)
+                  m_sentSize -= item->m_packet->GetSize();
+                  //Remove from the buffer to free memory and update BIF
+                  it = m_sentList.erase(it);
+                  continue; 
+                }
             }
-
-          if ((*sent_it)->m_packetNumberSequence <= (SequenceNumber32)(*ack_it) and (*sent_it)->m_packetNumberSequence > (SequenceNumber32)(*gap_it) and (*sent_it)->m_sacked == false)
-            {
-              NS_LOG_LOGIC ("Acked packet " << (*sent_it)->m_packetNumberSequence);
-              (*sent_it)->m_sacked = true;
-            }
-
+          ++it;
         }
     }
+    
+  NS_LOG_INFO ("Update: Sent Size (BIF) = " << m_sentSize);
+  return newlyAcked; // FIX 4: Return the acked packets for the CC
 }
 
 

@@ -46,6 +46,34 @@
 
 namespace ns3 {
 
+struct QuicPacketNumberSpace
+{
+  SequenceNumber32 m_nextTxSequence;
+  SequenceNumber32 m_largestAcked;
+  SequenceNumber32 m_largestReceived;
+  std::vector<SequenceNumber32> m_receivedPacketNumbers;
+  Time m_timeOfLastSentAckElicitingPacket;
+  Time m_lossTime;
+  Time m_lastReceived;
+  bool m_ackElicitingOutstanding;
+  bool m_queue_ack;
+  uint32_t m_numPacketsReceivedSinceLastAckSent;
+  EventId m_sendAckEvent;
+  EventId m_delAckEvent;
+  
+  QuicPacketNumberSpace() : 
+    m_nextTxSequence(0), 
+    m_largestAcked(0), 
+    m_largestReceived(0),
+    m_timeOfLastSentAckElicitingPacket(Seconds(0)),
+    m_lossTime(Seconds(0)),
+    m_lastReceived(Seconds(0)),
+    m_ackElicitingOutstanding(false),
+    m_queue_ack(false),
+    m_numPacketsReceivedSinceLastAckSent(0)
+  {}
+};
+
 class QuicL5Protocol;
 class QuicL4Protocol;
 
@@ -70,50 +98,95 @@ public:
   virtual  ~QuicSocketState (void)
   {}
 
-  // Loss Detection variables of interest
-  EventId m_lossDetectionAlarm;            //!< Multi-modal alarm used for loss detection.
-  uint32_t m_handshakeCount;               /**< The number of times the handshake packets have been retransmitted
-                                            *   without receiving an ack. */
-  uint32_t m_tlpCount;                     /**< The number of times a tail loss probe has been sent without
-                                            *   receiving an ack. */
-  uint32_t m_rtoCount;                      //!< The number of times an rto has been sent without receiving an ack.
-  SequenceNumber32 m_largestSentBeforeRto;  //!< The last packet number sent prior to the first retransmission timeout.
-  Time m_timeOfLastSentPacket;              //!< The time the most recent packet was sent.
-  SequenceNumber32 m_largestAckedPacket;    //!< The largest packet number acknowledged in an ACK frame.
+  // Loss Detection constants of interest (RFC 9002 Appendix A.2)
+  uint32_t m_kPacketThreshold;                  /**< Maximum reordering in packet number space before 
+                                                 *   loss detection considers a packet lost. */
+  double m_kTimeThreshold;                      /**< Maximum reordering in time space before time based loss detection
+                                                 *   considers a packet lost. In fraction of an RTT. */
+
+  Time m_kInitialRtt;                    //!< The default RTT used before an RTT sample is taken.
+  Time m_kGranularity;                   //!< The clock granularity (default 1ms).
+  uint32_t m_kMaxPacketsReceivedBeforeAckSend;  //!< The number of packets to be received before an ACK is triggered
+
+  // Loss Detection variables of interest (RFC 9002 Appendix A.3)
   Time m_latestRtt;                         /**< The most recent RTT measurement made when receiving an ack for a
                                              *   previously unacked packet. */
   Time m_smoothedRtt;                       //!< The smoothed RTT of the connection, computed as described in [RFC6298].
   Time m_rttVar;                            //!< The RTT variance, computed as described in [RFC6298].
-  Time m_minRtt;                            //!< The minimum RTT seen in the connection, ignoring ack delay.
-  Time m_maxAckDelay;                       /**< The maximum ack delay in an incoming ACK frame for this connection.
+  // m_minRtt is inherited from TcpSocketState
+  Time m_firstRttSample;                    //!< The time the first RTT sample was taken.
+  EventId m_lossDetectionAlarm;            //!< Multi-modal alarm used for loss detection.
+  uint32_t m_handshakeCount;               /**< The number of times the handshake packets have been retransmitted
+                                            *   without receiving an ack. */
+  Time m_timeOfLastSentAckElicitingPacket;  //!< The time the most recent ack-eliciting packet was sent.
+  SequenceNumber32 m_largestAckedPacket;    //!< The largest packet number acknowledged in an ACK frame.
+  Time m_peerMaxAckDelay;                   /**< The maximum ack delay in an incoming ACK frame for this connection.
                                              *   Excludes ack delays for ack only packets and those that create an
                                              *   RTT sample less than m_minRtt. */
   Time m_lossTime;                          /**< The time at which the next packet will be considered lost based
                                              *   on early transmit or exceeding the reordering window in time. */
-
-  // Congestion Control constants of interests
-  uint32_t m_kMinimumWindow;      //!< Default minimum congestion window.
-  double m_kLossReductionFactor;  //!< Reduction in congestion window when a new loss event is detected.
-
-  // Congestion Control variables of interests
-  SequenceNumber32 m_endOfRecovery;  /**< The largest packet number sent when QUIC detects a loss. When a larger packet
-                                      *   is acknowledged, QUIC exits recovery. */
-
-  // Loss Detection constants of interest
-  uint32_t m_kMaxTLPs;                          //!< Maximum number of tail loss probes before an RTO fires.
-  uint32_t m_kReorderingThreshold;              /**< Maximum reordering in packet number space before FACK style loss
-                                                 *   detection considers a packet lost. */
-  double m_kTimeReorderingFraction;               /**< Maximum reordering in time space before time based loss detection
-                                                 *   considers a packet lost. In fraction of an RTT. */
-  bool m_kUsingTimeLossDetection;               /**< Whether time based loss detection is in use. If false, uses FACK
-                                                 *   style loss detection. */
-  Time m_kMinTLPTimeout;                        //!< Minimum time in the future a tail loss probe alarm may be set for.
-  Time m_kMinRTOTimeout;                        //!< Minimum time in the future an RTO alarm may be set for.
-  Time m_kDelayedAckTimeout;                    //!< The lenght of the peer's delayed ack timer.
   uint8_t m_alarmType;                          //!< The type of the next alarm
   Time m_nextAlarmTrigger;                      //<! Time of the next alarm
-  Time m_kDefaultInitialRtt;                    //!< The default RTT used before an RTT sample is taken.
-  uint32_t m_kMaxPacketsReceivedBeforeAckSend;  //!< The number of packets to be received before an ACK is triggered
+
+  // Congestion Control constants of interests (RFC 9002 Appendix B.2)
+  uint32_t m_kInitialWindowMultiplier; //!< Multiplier for initial window calculation (default 10)
+  uint32_t m_kMinimumWindowMultiplier; //!< Multiplier for minimum window calculation (default 2)
+  double m_kLossReductionFactor;  //!< Reduction in congestion window when a new loss event is detected.
+  uint32_t m_kPersistentCongestionThreshold; //!< Threshold for persistent congestion (default 3)
+
+  /**
+   * \brief Set the initial window multiplier
+   * \param multiplier the multiplier
+   */
+  void SetInitialWindowMultiplier (uint32_t multiplier);
+
+  /**
+   * \brief Set the minimum window multiplier
+   * \param multiplier the multiplier
+   */
+  void SetMinimumWindowMultiplier (uint32_t multiplier);
+
+  /**
+   * \brief Get the initial window multiplier
+   * \return the multiplier
+   */
+  uint32_t GetInitialWindowMultiplier (void) const;
+
+  /**
+   * \brief Get the minimum window multiplier
+   * \return the multiplier
+   */
+  uint32_t GetMinimumWindowMultiplier (void) const;
+
+  /**
+   * \brief Set the initial RTT
+   * \param initialRtt the initial RTT
+   */
+  void SetInitialRtt (Time initialRtt);
+
+  /**
+   * \brief Get the initial RTT
+   * \return the initial RTT
+   */
+  Time GetInitialRtt (void) const;
+
+  /**
+   * \brief Returns the Minimum Congestion Window to be used
+   * \return the minimum CWND value
+   */
+  uint32_t GetMinimumWindow () const;
+
+  /**
+   * \brief Returns the Initial Congestion Window to be used
+   * \return the initial CWND value
+   */
+  uint32_t GetInitialWindow () const;
+
+  // Congestion Control variables of interests (RFC 9002 Appendix B.1)
+  SequenceNumber32 m_endOfRecovery;  /**< The largest packet number sent when QUIC detects a loss. When a larger packet
+                                      *   is acknowledged, QUIC exits recovery. */
+  Time m_congestionRecoveryStartTime; //!< The time when QUIC entered the current recovery epoch.
+  Time m_firstLostTime;              //!< Send time of the first packet lost in the current recovery epoch.
 
   // RateSample variables of interest
   uint64_t              m_delivered       {0};              //!< The total amount of data in bytes delivered so far
@@ -124,6 +197,8 @@ public:
                                                                 marked asdelivered was first sent */
   uint32_t              m_lastAckedSackedBytes {0};         //!< Size of data sacked in the last ack
   uint32_t              m_ackBytesSent    {0};              //!< amount of ACK-only bytes sent
+  TracedValue<uint32_t> m_ptoCount         {0};              //!< Current number of consecutive probe periods without an ACK
+  uint32_t              m_priorInFlight    {0};              //!< Bytes in flight before the current ACK was processed
 };
 
 /**
@@ -169,6 +244,7 @@ public:
  */
 class QuicSocketBase : public QuicSocket
 {
+  friend class QuicSocketTxBuffer;
 public:
   static const uint16_t MIN_INITIAL_PACKET_SIZE;
 
@@ -226,23 +302,25 @@ public:
    * In this implementation, only ACK, CONNECTION_CLOSE and APPLICATION_CLOSE
    * are supported.
    *
+   * \param p the packet payload of the frame
    * \param sub the QuicSubheader of the control frame
    */
-  void OnReceivedFrame (QuicSubheader &sub);
+  void OnReceivedFrame (Ptr<Packet> p, QuicSubheader &sub, PacketNumberSpace space);
 
   /**
    * \brief Called when an ACK frame is received
    *
    * \param sub the QuicSubheader of the ACK frame
+   * \param space the packet number space
    */
-  void OnReceivedAckFrame (QuicSubheader &sub);
+  void OnReceivedAckFrame (QuicSubheader &sub, PacketNumberSpace space);
 
   /**
    * \brief Called on sending an ACK frame
    *
    * \return the generated ACK frame
    */
-  Ptr<Packet> OnSendingAckFrame ();
+  Ptr<Packet> OnSendingAckFrame (PacketNumberSpace space);
 
   /**
    * \brief Return an object with the transport parameters of this socket
@@ -264,7 +342,7 @@ public:
    * \param frame a smart pointer to a packet
    * \return the size of the frame
    */
-  int AppendingTx (Ptr<Packet> frame);
+  int AppendingTx (Ptr<Packet> frame, PacketNumberSpace space = APPLICATION_DATA);
 
   /**
    * \brief Add a stream frame to the RX buffer and call NotifyDataRecv
@@ -316,13 +394,9 @@ public:
   uint32_t AvailableWindow () const;
 
   /**
-   * \brief Get the connection window
-   *
-   * \return the connection window
+   * \brief Public wrapper to notify acepted connections
    */
-  uint32_t ConnectionWindow () const;
-
-
+  void NotifyAppNewConnection (Ptr<Socket> socket, const Address& from) { NotifyNewConnectionCreated (socket, from); }
 
   /**
    * \brief Return total bytes in flight
@@ -397,13 +471,6 @@ public:
   uint32_t GetMaxStreamId () const;
 
   /**
-   * \brief return true if the packet that has just been received contains transport params
-   *
-   * \return a boolean, true if the packet that has just been received contains transport params
-   */
-  bool CouldContainTransportParameters () const;
-
-  /**
    * \brief Get the maximum of stream ID for bidirectional streams (i.e., number of streams - 1)
    *
    * Consider bidirectional stream IDs
@@ -420,6 +487,18 @@ public:
    * \return the maximum unidirectional stream ID
    */
   uint32_t GetMaxStreamIdUnidirectional () const;
+
+  /**
+   * \brief Set the maximum of stream ID for bidirectional streams
+   * \param maxStreamId the maximum bidirectional stream ID
+   */
+  void SetMaxStreamIdBidirectional (uint32_t maxStreamId);
+
+  /**
+   * \brief Set the maximum of stream ID for unidirectional streams
+   * \param maxStreamId the maximum unidirectional stream ID
+   */
+  void SetMaxStreamIdUnidirectional (uint32_t maxStreamId);
 
   /**
    * \brief Set the socket TX buffer size.
@@ -452,7 +531,14 @@ public:
   /**
    * \brief Schedule a queue ACK has if needed
    */
-  void MaybeQueueAck ();
+  void MaybeQueueAck (PacketNumberSpace space, bool isOutOfOrder);
+
+  /**
+   * \brief Send an ACK frame
+   *
+   * \param space the packet number space for which to send the ACK
+   */
+  void SendAck (PacketNumberSpace space);
 
   /**
    * \brief Callback function to hook to QuicSocketState congestion window
@@ -494,6 +580,22 @@ public:
    * \param newValue new nextTxSeq value
    */
   void UpdateNextTxSequence (SequenceNumber32 oldValue, SequenceNumber32 newValue);
+
+  /**
+   * \brief Callback function to hook to QuicSocketState bytes in flight
+   *
+   * \param oldValue old bytes in flight value
+   * \param newValue new bytes in flight value
+   */
+  void UpdateBytesInFlight (uint32_t oldValue, uint32_t newValue);
+
+    /**
+   * \brief Callback function to hook to QuicSocketState PTO count
+   *
+   * \param oldValue old PTO count value
+   * \param newValue new PTO count value
+   */
+  void UpdatePtoCount (uint32_t oldValue, uint32_t newValue);
 
   /**
    * \brief Set the initial Slow Start Threshold.
@@ -564,7 +666,7 @@ public:
   virtual enum SocketType GetSocketType (void) const;
 
   /**
-   * Set the latency bound for a specified stream
+   * \brief Set the latency bound for a specified stream
    *
    * \param streamId The stream ID
    * \param latency The stream's maximum latency
@@ -595,6 +697,18 @@ public:
   Time GetDefaultLatency ();
 
   /**
+   * \brief Set the maximum ack delay
+   * \param maxAckDelay the maximum ack delay
+   */
+  void SetMaxAckDelay (Time maxAckDelay);
+
+  /**
+   * \brief Get the maximum ack delay
+   * \return the maximum ack delay
+   */
+  Time GetMaxAckDelay (void) const;
+
+  /**
    * \brief TracedCallback signature for QUIC packet transmission or reception events.
    *
    * \param [in] packet The packet.
@@ -604,7 +718,26 @@ public:
   typedef void (*QuicTxRxTracedCallback)(const Ptr<const Packet> packet, const QuicHeader& header,
                                          const Ptr<const QuicSocketBase> socket);
 
+  bool IsServer(void) const { return m_isServer;}
+
+  /**
+   * \brief Update the state of the internal state machine
+   *
+   * \param the new state
+   */
+  void SetState (TracedValue<QuicStates_t> state);
+
+  /**
+   * \return The TCB.
+   */
+  Ptr<QuicSocketState> GetTcb () const { return m_tcb; }
+
 protected:
+  /**
+   * \brief Connect the TCB traces
+   */
+  void ConnectTcbTraces (void);
+
   // Implementation of QuicSocket virtuals
   virtual bool SetAllowBroadcast (bool allowBroadcast);
   virtual bool GetAllowBroadcast (void) const;
@@ -617,12 +750,12 @@ protected:
   Ptr<QuicL5Protocol> CreateStreamController ();
 
   /**
-   * \brief Set the RTO timer (called when packets or ACKs are sent)
+   * \brief Set the PTO timer (called when packets or ACKs are sent)
    */
   void SetReTxTimeout ();
 
   /**
-   * \brief Handle what happens in case of an RTO
+   * \brief Handle what happens in case of a PTO
    */
   void ReTxTimeout ();
 
@@ -632,20 +765,17 @@ protected:
   void DoRetransmit (std::vector<Ptr<QuicSocketTxItem> > lostPackets);
 
   /**
-   * \brief Extract at most maxSize bytes from the TxBuffer at sequence packetNumber, add the
-   *        QUIC header, and send to QuicL4Protocol
+   * \brief Extract at most maxSize bytes from the TxBuffer for the given packet number
+   *        space, add the QUIC header, ACK frames if any, and send to QuicL4Protocol.
    *
    * According to the internal state of the socket, a different header is built.
-   * Sequence numbers should be 64 bits in the QUIC standard, but we use 32 to
-   * be compatible with the TcpSocketBase class
    *
-   * \param seq the sequence number
+   * \param space the packet space number
    * \param maxSize the maximum data block to be transmitted (in bytes)
    * \param withAck forces an ACK to be sent
    * \returns the number of bytes sent
    */
-  uint32_t SendDataPacket (SequenceNumber32 packetNumber, uint32_t maxSize,
-                           bool withAck);
+  uint32_t SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool withAck);
 
   /**
    * \brief Send a Connection Close frame
@@ -696,13 +826,6 @@ protected:
                      Address &address);
 
   /**
-   * \brief Update the state of the internal state machine
-   *
-   * \param the new state
-   */
-  void SetState (TracedValue<QuicStates_t> state);
-
-  /**
    * \brief Check if a version is supported by the QuicSocket
    *
    * \param version the version to be checked
@@ -710,16 +833,24 @@ protected:
   bool IsVersionSupported (uint32_t version);
 
   /**
-   * \brief Check if there are missing packets in the m_receivedPacketNumbers list
+   * \brief Check if the new packet number has skipped a number or is old.
    *
-   * \return true if there are missing packets
+   * \param space the packet number space to check
+   * \param packetNumber the packet number of the currently processed packet
+   * \return true if the recevied packet is out of order
    */
-  bool HasReceivedMissing ();
+  bool IsOutOfOrder (PacketNumberSpace space, SequenceNumber32 packetNumber);
 
   /**
    * \brief Send an ACK packet
    */
   void SendAck ();
+
+  /**
+   * \brief Send a Path Response packet
+   * \param data the 8-byte data to include in the PATH_RESPONSE
+   */
+  void SendPathResponse (uint64_t data);
 
   /**
    * \brief Call Socket::NotifyConnectionSucceeded()
@@ -744,23 +875,26 @@ protected:
   Ptr<QuicL5Protocol> m_quicl5;  //!< The associated L5 Protocol
 
   // Rx and Tx buffer management
-  Ptr<QuicSocketRxBuffer> m_rxBuffer;                     //!< RX buffer
-  Ptr<QuicSocketTxBuffer> m_txBuffer;                     //!< TX buffer
-  uint32_t m_socketTxBufferSize;                          //!< Size of the socket TX buffer
-  uint32_t m_socketRxBufferSize;                          //!< Size of the socket RX buffer
-  std::vector<SequenceNumber32> m_receivedPacketNumbers;  //!< Received packet number vector
-  TypeId m_schedulingTypeId;                                                      //!< The socket type of the packet scheduler
-  Time m_defaultLatency;                                                                  //!< The default latency bound (only used by the EDF scheduler)
+  Ptr<QuicSocketRxBuffer> m_rxBuffer;       //!< RX buffer
+  Ptr<QuicSocketTxBuffer> m_txBuffer;       //!< TX buffer
+  uint32_t m_socketTxBufferSize;            //!< Size of the socket TX buffer
+  uint32_t m_socketRxBufferSize;            //!< Size of the socket RX buffer
+  QuicPacketNumberSpace m_pnSpaces[3];      //!< Per-space packet number tracking
+  TypeId m_schedulingTypeId;                //!< The socket type of the packet scheduler
+  Time m_defaultLatency;                    //!< The default latency bound (only used by the EDF scheduler)
+  uint64_t m_bytesRead;                     //!< Bytes consumed by the application (for flow control)
 
   // State-related attributes
+  bool m_handshakeDoneSent;                 //!< True if the Handshake Done frame has been sent
+  TracedValue<bool> m_handshakeConfirmed;   //!< True if the handshake has been confirmed
   TracedValue<QuicStates_t> m_socketState;  //!< State in the Congestion state machine
   uint16_t m_transportErrorCode;            //!< Quic transport error code
-  bool m_serverBusy;                        //!< If true, server too busy to accept new connections
   mutable enum SocketErrno m_errno;         //!< Socket error code
   bool m_connected;                         //!< Check if connection is established
   uint64_t m_connectionId;                  //!< Connection id
   uint32_t m_vers;                          //!< Quic protocol version
   QuicHeader::KeyPhase_t m_keyPhase;        //!< Key phase
+  bool m_isServer;                          //!< True if the socket is a server
   Time m_lastReceived;                      //!< Time of last received packet
 
   // Transport Parameters values
@@ -768,37 +902,28 @@ protected:
   uint32_t m_max_data;                   //!< The maximum amount of data that can be sent on the connection
   uint32_t m_initial_max_stream_id_bidi; //!< The the initial maximum number of application-owned bidirectional streams the peer may initiate
   TracedValue<Time> m_idleTimeout;       //!< The idle timeout value in seconds
-  bool m_omit_connection_id;             //!< The flag that indicates if the connection id is required in the upcoming connection
-/*uint128_t  m_stateless_reset_token;*/  //!< The stateless reset token
   uint8_t m_ack_delay_exponent;          //!< The exponent used to decode the ack delay field in the ACK frame
+  Time m_max_ack_delay;                  //!< The maximum ack delay we promise to the peer (RFC 9000 18.2); purely local ACK-sending policy, not congestion-control state
   uint32_t m_initial_max_stream_id_uni;  //!< The initial maximum number of application-owned unidirectional streams the peer may initiate
   uint32_t m_maxTrackedGaps;             //!< The maximum number of gaps in an ACK
 
   // Transport Parameters management
   bool m_receivedTransportParameters;      //!< Check if Transport Parameters are already been received
-  bool m_couldContainTransportParameters;  //!< Check if in the actual conditions can receive Transport Parameters
 
   // Timers and Events
-  EventId m_sendPendingDataEvent;             //!< Micro-delay event to send pending data
-  EventId m_retxEvent;                        //!< Retransmission event
   EventId m_idleTimeoutEvent;                 //!< Event triggered upon receiving or sending a packet, when it expires the connection closes
   EventId m_drainingPeriodEvent;              //!< Event triggered upon idle timeout or immediate connection close, when it expires all closes
-  TracedValue<Time> m_rto;                    //!< Retransmit timeout
   TracedValue<Time> m_drainingPeriodTimeout;  //!< Draining Period timeout
-  EventId m_sendAckEvent;                     //!< Send ACK timeout event
-  EventId m_delAckEvent;                      //!< Delayed ACK timeout event
   bool m_flushOnClose;                        //!< Control behavior on connection close
   bool m_closeOnEmpty;                        //!< True if the socket will close after sending the buffered packets
 
   // Congestion Control
   Ptr<QuicSocketState> m_tcb;                     //!< Congestion control informations
   Ptr<TcpCongestionOps> m_congestionControl;      //!< Congestion control
-  TracedValue<Time> m_lastRtt;                                 //!< Latest measured RTT
+  TracedValue<Time> m_lastRtt;                    //!< Latest measured RTT
   bool m_quicCongestionControlLegacy;             //!< Quic Congestion control if true, TCP Congestion control if false
-  bool m_queue_ack;                               //!< Indicates a request for a queue ACK if true
-  uint32_t m_numPacketsReceivedSinceLastAckSent;  //!< Number of packets received since last ACK sent
-  uint32_t m_lastMaxData;                                                 //!< Last MaxData ACK
-  uint32_t m_maxDataInterval;                                     //!< Interval between successive MaxData frames in ACKs
+  uint32_t m_lastMaxData;                         //!< Last MaxData ACK
+  uint32_t m_maxDataInterval;                     //!< Interval between successive MaxData frames in ACKs
 
   uint32_t m_initialPacketSize; //!< size of the first packet to be sent durin the handshake (at least 1200 bytes, per RFC)
 
@@ -829,6 +954,16 @@ protected:
   * \brief Callback pointer for tx sequence trace chaining
   */
   TracedCallback<uint32_t, uint32_t> m_nextTxSequenceTrace;
+
+  /**
+  * \brief Callback pointer for bytes in flight trace chaining
+  */
+  TracedCallback<uint32_t, uint32_t> m_bytesInFlightTrace;
+
+  /**
+  * \brief Callback pointer for PTO counter trace chaining
+  */
+  TracedCallback<uint32_t, uint32_t> m_ptoCountTrace;
 
   // The following two traces pass a packet with a QUIC header
   TracedCallback<Ptr<const Packet>, const QuicHeader&,

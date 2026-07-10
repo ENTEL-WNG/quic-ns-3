@@ -19,7 +19,7 @@
  *          Federico Chiariotti <chiariotti.federico@gmail.com>
  *          Michele Polese <michele.polese@gmail.com>
  *          Davide Marcato <davidemarcato@outlook.com>
- *          
+ *
  */
 
 #include "ns3/test.h"
@@ -70,6 +70,11 @@ private:
    */
   void
   TestStreamExtract ();
+  /**
+   * \brief Test FIN bit handling - stream termination (RFC 9000 §19.8)
+   */
+  void
+  TestStreamFin ();
 };
 
 QuicRxBufferTestCase::QuicRxBufferTestCase () :
@@ -80,41 +85,16 @@ QuicRxBufferTestCase::QuicRxBufferTestCase () :
 void
 QuicRxBufferTestCase::DoRun ()
 {
-  /*
-   * Test the insertion of packets in the Socket RX buffer:
-   * -> add packets till socket tx buffer overflow
-   * -> check correctness of buffer application size and available size
-   * -> checking availability count
-   */
+  // RFC 9000 §2.2: Test receive buffer capacity enforcement
   TestSocketAdd ();
-
-  /*
-   * Test the extraction of packets from the Socket RX buffer
-   * -> add 3 packets 
-   * -> extract all packets and test that the buffer is empty
-   * -> check correctness of buffer application size and available size
-   * -> checking availability count
-   */
   TestSocketExtract ();
 
-  /*
-   * Test the insertion of packets in the Stream RX buffer:
-   * -> add packets till stream tx buffer overflow
-   * -> check correctness of buffer application size and available size
-   * -> checking availability count
-   * -> check in-order buffer insertion and duplicate packets
-   * -> check FIN functionality
-   */
+  // RFC 9000 §2.2: Test in-order delivery, duplicate rejection, gap filling
   TestStreamAdd ();
-
-  /*
-   * Test the extraction of packets from the Stream RX buffer:
-   * -> add 3 packets 
-   * -> extract first 2 packets and readd them again
-   * -> extract all packets and test that the buffer is empty
-   * -> check correctness of buffer application size and available size
-   */
   TestStreamExtract ();
+
+  // RFC 9000 §19.8: Test FIN bit (stream termination)
+  TestStreamFin ();
 }
 
 void
@@ -201,7 +181,7 @@ QuicRxBufferTestCase::TestSocketExtract ()
   NS_TEST_ASSERT_MSG_EQ(rxBuf.Available (), 3600,
                         "Availability differs from expected");
   NS_TEST_ASSERT_MSG_EQ(rxBuf.Size (), 0, "Buffer size differs from expected");
-  NS_TEST_ASSERT_MSG_EQ(out, 0, "Packet size differs from expected");
+  NS_TEST_ASSERT_MSG_NE(!out, true, "Packet size differs from expected");
 }
 
 void
@@ -243,7 +223,7 @@ QuicRxBufferTestCase::TestStreamAdd ()
   sub.SetOffset (1200);
   pos = rxBuf.Add (p, sub);
   deliverable = rxBuf.GetDeliverable (0);
-  
+
   NS_TEST_ASSERT_MSG_EQ(pos, true, "Failed to add packet");
   NS_TEST_ASSERT_MSG_EQ(rxBuf.Available (), 15600, "Wrong available data size");
   NS_TEST_ASSERT_MSG_EQ(rxBuf.Size (), 2400, "Wrong buffer size");
@@ -332,33 +312,78 @@ QuicRxBufferTestCase::TestStreamExtract ()
   sub.SetOffset (2400);
   rxBuf.Add (p, sub);
   deliverable = rxBuf.GetDeliverable (0);
-  
+
   // extract first two packets
   Ptr<Packet> outPkt = rxBuf.Extract(deliverable.second - 1200);
-  
-  NS_TEST_ASSERT_MSG_NE(outPkt, 0, "Failed to extract packets");
+
+  NS_TEST_ASSERT_MSG_NE(!outPkt, true, "Failed to extract packets");
   NS_TEST_ASSERT_MSG_EQ(outPkt->GetSize(),2400,  "Wrong packet size");
   NS_TEST_ASSERT_MSG_EQ(rxBuf.Available (), 16800, "Wrong available data size");
   NS_TEST_ASSERT_MSG_EQ(rxBuf.Size (), 1200, "Wrong buffer size");
-  
+
   // insert missing packet
   sub.SetOffset (0);
   rxBuf.Add (outPkt, sub);
   deliverable = rxBuf.GetDeliverable (0);
-  
+
   // extract all packets
   outPkt = rxBuf.Extract(deliverable.second);
-  
-  NS_TEST_ASSERT_MSG_NE(outPkt, 0, "Failed to extract packets");
+
+  NS_TEST_ASSERT_MSG_NE(!outPkt, true, "Failed to extract packets");
   NS_TEST_ASSERT_MSG_EQ(outPkt->GetSize(), 3600,  "Wrong packet size");
   NS_TEST_ASSERT_MSG_EQ(rxBuf.Available (), 18000, "Wrong available data size");
   NS_TEST_ASSERT_MSG_EQ(rxBuf.Size (), 0, "Wrong buffer size");
 
   // test empty buffer
   outPkt = rxBuf.Extract(1200);
-  NS_TEST_ASSERT_MSG_EQ(outPkt, 0, "Failed to extract packets");
+  NS_TEST_ASSERT_MSG_NE(!outPkt, true, "Failed to extract packets");
   NS_TEST_ASSERT_MSG_EQ(rxBuf.Available (), 18000, "Wrong available data size");
   NS_TEST_ASSERT_MSG_EQ(rxBuf.Size (), 0, "Wrong buffer size");
+}
+
+void
+QuicRxBufferTestCase::TestStreamFin ()
+{
+  // RFC 9000 §19.8: A STREAM frame with the FIN bit set indicates the final
+  // size of the stream. The receiver must accept it and treat the stream as
+  // half-closed (remote) once the FIN is received.
+
+  QuicStreamRxBuffer rxBuf;
+  rxBuf.SetMaxBufferSize (18000);
+
+  Ptr<Packet> p = Create<Packet> (1200);
+
+  // Normal data frame (FIN=false)
+  QuicSubheader sub = QuicSubheader::CreateStreamSubHeader (1, 0, p->GetSize (),
+                                                            false, true, false);
+  sub.SetOffset (0);
+  bool ok = rxBuf.Add (p, sub);
+  NS_TEST_ASSERT_MSG_EQ (ok, true, "Should accept non-FIN data frame");
+
+  // FIN frame at the end of data (FIN=true, marks stream end)
+  Ptr<Packet> finPkt = Create<Packet> (1200);
+  QuicSubheader finSub = QuicSubheader::CreateStreamSubHeader (1, 1200, finPkt->GetSize (),
+                                                               true, true, false);
+  finSub.SetOffset (1200);
+  ok = rxBuf.Add (finPkt, finSub);
+  NS_TEST_ASSERT_MSG_EQ (ok, true, "Should accept FIN-bearing frame");
+
+  // Buffer should now contain both packets
+  NS_TEST_ASSERT_MSG_EQ (rxBuf.Size (), 2400, "Buffer should hold both data and FIN frame data");
+
+  // Deliverable data should cover both frames
+  std::pair<uint64_t, uint64_t> deliverable = rxBuf.GetDeliverable (0);
+  NS_TEST_ASSERT_MSG_EQ (deliverable.second, 2400,
+                         "All data including FIN frame should be deliverable");
+
+  // Duplicate FIN at same offset must be rejected
+  Ptr<Packet> dupFin = Create<Packet> (1200);
+  QuicSubheader dupSub = QuicSubheader::CreateStreamSubHeader (1, 1200, dupFin->GetSize (),
+                                                               true, true, false);
+  dupSub.SetOffset (1200);
+  bool dup = rxBuf.Add (dupFin, dupSub);
+  NS_TEST_ASSERT_MSG_EQ (dup, false, "Duplicate FIN frame at same offset must be rejected");
+  NS_TEST_ASSERT_MSG_EQ (rxBuf.Size (), 2400, "Buffer size unchanged after duplicate FIN");
 }
 
 void

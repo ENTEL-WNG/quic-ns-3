@@ -130,8 +130,9 @@ public:
    * \param largestAcknowledged The largest acknowledged sequence number
    * \param additionalAckBlocks The sequence numbers that were just acknowledged
    * \param gaps The gaps in the acknowledgment
+   * \return the newly ACKed items
    */
-  void OnAckUpdate (const uint64_t largestAcknowledged, const std::vector<uint64_t> &additionalAckBlocks, const std::vector<uint64_t> &gaps);
+  std::vector<Ptr<QuicStreamTxItem>> OnAckUpdate (const uint64_t largestAcknowledged, const std::vector<uint64_t> &additionalAckBlocks, const std::vector<uint64_t> &gaps);
 
   /**
    * Get the max size of the buffer

@@ -26,6 +26,11 @@
  #define NS_LOG_APPEND_CONTEXT \
   if (m_node and m_connectionId) { std::clog << " [node " << m_node->GetId () << " socket " << m_connectionId << "] "; }
 */
+#include <cstdint>
+#include <math.h>
+#include <algorithm>
+#include <vector>
+#include <sstream>
 
 #include "ns3/abort.h"
 #include "ns3/node.h"
@@ -63,10 +68,8 @@
 #include "ns3/tcp-option-sack.h"
 #include "ns3/rtt-estimator.h"
 #include "quic-socket-tx-edf-scheduler.h"
-#include <math.h>
-#include <algorithm>
-#include <vector>
-#include <sstream>
+#include "quic-socket.h"
+#include "quic-stream-base.h"
 #include <ns3/core-module.h>
 
 namespace ns3 {
@@ -92,8 +95,8 @@ QuicSocketBase::GetTypeId (void)
     .SetGroupName ("Internet")
     .AddConstructor<QuicSocketBase> ()
     .AddAttribute ("InitialVersion",
-                   "Quic Version. The default value starts a version negotiation procedure",
-                   UintegerValue (QUIC_VERSION_NEGOTIATION),
+                   "The version used by the socket.",
+                   UintegerValue (QUIC_VERSION_NS3_IMPL),
                    MakeUintegerAccessor (&QuicSocketBase::m_vers),
                    MakeUintegerChecker<uint32_t> ())
     .AddAttribute ("IdleTimeout",
@@ -103,31 +106,27 @@ QuicSocketBase::GetTypeId (void)
                    MakeTimeChecker ())
     .AddAttribute ("MaxStreamData",
                    "Stream Maximum Data",
-                   UintegerValue (4294967295),      // according to the QUIC RFC this value should default to 0, and be increased by the client/server
+                   UintegerValue (4294967295),
                    MakeUintegerAccessor (&QuicSocketBase::m_initial_max_stream_data),
                    MakeUintegerChecker<uint32_t> ())
     .AddAttribute ("MaxData",
                    "Connection Maximum Data",
-                   UintegerValue (4294967295),      // according to the QUIC RFC this value should default to 0, and be increased by the client/server
+                   UintegerValue (4294967295),
                    MakeUintegerAccessor (&QuicSocketBase::m_max_data),
                    MakeUintegerChecker<uint32_t> ())
     .AddAttribute ("MaxStreamIdBidi",
                    "Maximum StreamId for Bidirectional Streams",
-                   UintegerValue (2),                   // according to the QUIC RFC this value should default to 0, and be increased by the client/server
+                   UintegerValue (5),
                    MakeUintegerAccessor (&QuicSocketBase::m_initial_max_stream_id_bidi),
                    MakeUintegerChecker<uint32_t> ())
     .AddAttribute ("MaxStreamIdUni", "Maximum StreamId for Unidirectional Streams",
-                   UintegerValue (2),                                  // according to the QUIC RFC this value should default to 0, and be increased by the client/server
+                   UintegerValue (5),
                    MakeUintegerAccessor (&QuicSocketBase::m_initial_max_stream_id_uni),
                    MakeUintegerChecker<uint32_t> ())
     .AddAttribute ("MaxTrackedGaps", "Maximum number of gaps in an ACK",
                    UintegerValue (20),
                    MakeUintegerAccessor (&QuicSocketBase::m_maxTrackedGaps),
                    MakeUintegerChecker<uint32_t> ())
-    .AddAttribute ("OmitConnectionId", "Omit ConnectionId field in Short QuicHeader format",
-                   BooleanValue (false),
-                   MakeBooleanAccessor (&QuicSocketBase::m_omit_connection_id),
-                   MakeBooleanChecker ())
     .AddAttribute ("MaxPacketSize", "Maximum Packet Size",
                    UintegerValue (1460),
                    MakeUintegerAccessor (&QuicSocketBase::GetSegSize,
@@ -143,51 +142,19 @@ QuicSocketBase::GetTypeId (void)
                    MakeUintegerAccessor (&QuicSocketBase::GetSocketRcvBufSize,
                                          &QuicSocketBase::SetSocketRcvBufSize),
                    MakeUintegerChecker<uint32_t> ())
-    //	.AddAttribute ("StatelessResetToken, "Stateless Reset Token",
-    //				   UintegerValue (0),
-    //				   MakeUintegerAccessor (&QuicSocketBase::m_stateless_reset_token),
-    //				   MakeUintegerChecker<uint128_t> ())
-    .AddAttribute ("AckDelayExponent", "Ack Delay Exponent", 
+    .AddAttribute ("AckDelayExponent", "Ack Delay Exponent",
                    UintegerValue (3),
                    MakeUintegerAccessor (&QuicSocketBase::m_ack_delay_exponent),
                    MakeUintegerChecker<uint8_t> ())
+    .AddAttribute ("MaxAckDelay", "The maximum amount of time by which the endpoint will delay sending acknowledgments",
+                   TimeValue (MilliSeconds (25)),
+                   MakeTimeAccessor (&QuicSocketBase::GetMaxAckDelay,
+                                     &QuicSocketBase::SetMaxAckDelay),
+                   MakeTimeChecker ())
     .AddAttribute ("FlushOnClose", "Determines the connection close behavior",
                    BooleanValue (true),
                    MakeBooleanAccessor (&QuicSocketBase::m_flushOnClose),
                    MakeBooleanChecker ())
-    .AddAttribute ("kMaxTLPs",
-                   "Maximum number of tail loss probes before an RTO fires",
-                   UintegerValue (2),
-                   MakeUintegerAccessor (&QuicSocketState::m_kMaxTLPs),
-                   MakeUintegerChecker<uint32_t> ())
-    .AddAttribute ("kReorderingThreshold", "Maximum reordering in packet number space before FACK style loss detection considers a packet lost",
-                   UintegerValue (3),
-                   MakeUintegerAccessor (&QuicSocketState::m_kReorderingThreshold),
-                   MakeUintegerChecker<uint32_t> ())
-    .AddAttribute ("kTimeReorderingFraction", "Maximum reordering in time space before time based loss detection considers a packet lost",
-                   DoubleValue (9 / 8),
-                   MakeDoubleAccessor (&QuicSocketState::m_kTimeReorderingFraction),
-                   MakeDoubleChecker<double> (0))
-    .AddAttribute ("kUsingTimeLossDetection", "Whether time based loss detection is in use", 
-                   BooleanValue (false),
-                   MakeBooleanAccessor (&QuicSocketState::m_kUsingTimeLossDetection),
-                   MakeBooleanChecker ())
-    .AddAttribute ("kMinTLPTimeout", "Minimum time in the future a tail loss probe alarm may be set for",
-                   TimeValue (MilliSeconds (10)),
-                   MakeTimeAccessor (&QuicSocketState::m_kMinTLPTimeout),
-                   MakeTimeChecker ())
-    .AddAttribute ("kMinRTOTimeout", "Minimum time in the future an RTO alarm may be set for",
-                   TimeValue (MilliSeconds (200)),
-                   MakeTimeAccessor (&QuicSocketState::m_kMinRTOTimeout),
-                   MakeTimeChecker ())
-    .AddAttribute ("kDelayedAckTimeout", "The length of the peer's delayed ACK timer",
-                   TimeValue (MilliSeconds (25)),
-                   MakeTimeAccessor (&QuicSocketState::m_kDelayedAckTimeout),
-                   MakeTimeChecker ())
-    .AddAttribute ("kDefaultInitialRtt", "The default RTT used before an RTT sample is taken",
-                   TimeValue (MilliSeconds (100)),
-                   MakeTimeAccessor (&QuicSocketState::m_kDefaultInitialRtt),
-                   MakeTimeChecker ())
     .AddAttribute ("InitialSlowStartThreshold",
                    "QUIC initial slow start threshold (bytes)",
                    UintegerValue (INT32_MAX),
@@ -211,27 +178,14 @@ QuicSocketBase::GetTypeId (void)
                    TimeValue (MilliSeconds (100)),
                    MakeTimeAccessor (&QuicSocketBase::m_defaultLatency),
                    MakeTimeChecker ())
-    .AddAttribute ("LegacyCongestionControl", "When true, use TCP implementations for the congestion control",
-                   BooleanValue (false),
-                   MakeBooleanAccessor (&QuicSocketBase::m_quicCongestionControlLegacy),
-                   MakeBooleanChecker ())
     .AddAttribute ("TCB",
                    "The connection's QuicSocketState",
                    PointerValue (),
                    MakePointerAccessor (&QuicSocketBase::m_tcb),
                    MakePointerChecker<QuicSocketState> ())
-    // .AddTraceSource ("RTO", "Retransmission timeout",
-    //                  MakeTraceSourceAccessor (&QuicSocketBase::m_rto),
-    //                  "ns3::Time::TracedValueCallback").AddTraceSource (
-    //     "IdleTO", "Idle timeout",
-    //     MakeTraceSourceAccessor (&QuicSocketBase::m_idleTimeout),
-    //     "ns3::Time::TracedValueCallback").AddTraceSource (
-    //     "DrainingPeriodTO", "Draining Period timeout",
-    //     MakeTraceSourceAccessor (&QuicSocketBase::m_drainingPeriodTimeout),
-    //     "ns3::Time::TracedValueCallback");
-    .AddTraceSource ("RTO",
-                     "Retransmission timeout",
-                     MakeTraceSourceAccessor (&QuicSocketBase::m_rto),
+    .AddTraceSource ("PTOCounter",
+                     "The number of consecutive PTOs that have occurred",
+                     MakeTraceSourceAccessor (&QuicSocketBase::m_ptoCountTrace),
                      "ns3::Time::TracedValueCallback")
     .AddTraceSource ("RTT",
                      "Last RTT sample",
@@ -240,39 +194,15 @@ QuicSocketBase::GetTypeId (void)
     .AddTraceSource ("NextTxSequence",
                      "Next sequence number to send (SND.NXT)",
                      MakeTraceSourceAccessor (&QuicSocketBase::m_nextTxSequenceTrace),
-                     "ns3::SequenceNumber32TracedValueCallback")
+                     "ns3::TracedValueCallback::Uint32")
     .AddTraceSource ("HighestSequence",
                      "Highest sequence number ever sent in socket's life time",
                      MakeTraceSourceAccessor (&QuicSocketBase::m_highTxMarkTrace),
-                     "ns3::SequenceNumber32TracedValueCallback")
-    // .AddTraceSource ("State",
-    //                  "TCP state",
-    //                  MakeTraceSourceAccessor (&QuicSocketBase::m_state),
-    //                  "ns3::TcpStatesTracedValueCallback")
+                     "ns3::TracedValueCallback::Uint32")
     .AddTraceSource ("CongState",
                      "TCP Congestion machine state",
                      MakeTraceSourceAccessor (&QuicSocketBase::m_congStateTrace),
                      "ns3::TcpSocketState::TcpCongStatesTracedValueCallback")
-    // .AddTraceSource ("AdvWND",
-    //                  "Advertised Window Size",
-    //                  MakeTraceSourceAccessor (&QuicSocketBase::m_advWnd),
-    //                  "ns3::TracedValueCallback::Uint32")
-    // .AddTraceSource ("RWND",
-    //                  "Remote side's flow control window",
-    //                  MakeTraceSourceAccessor (&QuicSocketBase::m_rWnd),
-    //                  "ns3::TracedValueCallback::Uint32")
-    // .AddTraceSource ("BytesInFlight",
-    //                  "Socket estimation of bytes in flight",
-    //                  MakeTraceSourceAccessor (&QuicSocketBase::m_bytesInFlight),
-    //                  "ns3::TracedValueCallback::Uint32")
-    // .AddTraceSource ("HighestRxSequence",
-    //                  "Highest sequence number received from peer",
-    //                  MakeTraceSourceAccessor (&QuicSocketBase::m_highRxMark),
-    //                  "ns3::SequenceNumber32TracedValueCallback")
-    // .AddTraceSource ("HighestRxAck",
-    //                  "Highest ack received from peer",
-    //                  MakeTraceSourceAccessor (&QuicSocketBase::m_highRxAckMark),
-    //                  "ns3::SequenceNumber32TracedValueCallback")
     .AddTraceSource ("CongestionWindow",
                      "The QUIC connection's congestion window",
                      MakeTraceSourceAccessor (&QuicSocketBase::m_cWndTrace),
@@ -280,6 +210,10 @@ QuicSocketBase::GetTypeId (void)
     .AddTraceSource ("SlowStartThreshold",
                      "TCP slow start threshold (bytes)",
                      MakeTraceSourceAccessor (&QuicSocketBase::m_ssThTrace),
+                     "ns3::TracedValueCallback::Uint32")
+    .AddTraceSource ("BytesInFlight",
+                     "The QUIC connection's bytes in flight",
+                     MakeTraceSourceAccessor (&QuicSocketBase::m_bytesInFlightTrace),
                      "ns3::TracedValueCallback::Uint32")
     .AddTraceSource ("Tx",
                      "Send QUIC packet to UDP protocol",
@@ -289,6 +223,10 @@ QuicSocketBase::GetTypeId (void)
                      "Receive QUIC packet from UDP protocol",
                      MakeTraceSourceAccessor (&QuicSocketBase::m_rxTrace),
                      "ns3::QuicSocketBase::QuicTxRxTracedCallback")
+    .AddTraceSource ("HandshakeConfirmed",
+                     "For clients, true when the server confirmed the handshake",
+                     MakeTraceSourceAccessor (&QuicSocketBase::m_handshakeConfirmed),
+                     "ns3::TracedValueCallback::Bool")
   ;
   return tid;
 }
@@ -300,216 +238,370 @@ QuicSocketState::GetTypeId (void)
     TypeId ("ns3::QuicSocketState")
     .SetParent<TcpSocketState> ()
     .SetGroupName ("Internet")
-    .AddAttribute ("kMaxTLPs",
-                   "Maximum number of tail loss probes before an RTO fires",
-                   UintegerValue (2),
-                   MakeUintegerAccessor (&QuicSocketState::m_kMaxTLPs),
-                   MakeUintegerChecker<uint32_t> ())
-    .AddAttribute ("kReorderingThreshold",
-                   "Maximum reordering in packet number space before FACK style loss detection considers a packet lost",
-                   UintegerValue (3),
-                   MakeUintegerAccessor (&QuicSocketState::m_kReorderingThreshold),
-                   MakeUintegerChecker<uint32_t> ())
-    .AddAttribute ("kTimeReorderingFraction",
-                   "Maximum reordering in time space before time based loss detection considers a packet lost",
-                   DoubleValue (9 / 8),
-                   MakeDoubleAccessor (&QuicSocketState::m_kTimeReorderingFraction),
-                   MakeDoubleChecker<double> (0))
-    .AddAttribute ("kUsingTimeLossDetection",
-                   "Whether time based loss detection is in use", BooleanValue (false),
-                   MakeBooleanAccessor (&QuicSocketState::m_kUsingTimeLossDetection),
-                   MakeBooleanChecker ())
-    .AddAttribute ("kMinTLPTimeout",
-                   "Minimum time in the future a tail loss probe alarm may be set for",
-                   TimeValue (MilliSeconds (10)),
-                   MakeTimeAccessor (&QuicSocketState::m_kMinTLPTimeout),
-                   MakeTimeChecker ())
-    .AddAttribute ("kMinRTOTimeout",
-                   "Minimum time in the future an RTO alarm may be set for",
-                   TimeValue (MilliSeconds (200)),
-                   MakeTimeAccessor (&QuicSocketState::m_kMinRTOTimeout),
-                   MakeTimeChecker ())
-    .AddAttribute ("kDelayedAckTimeout", "The lenght of the peer's delayed ack timer",
-                   TimeValue (MilliSeconds (25)),
-                   MakeTimeAccessor (&QuicSocketState::m_kDelayedAckTimeout),
-                   MakeTimeChecker ())
-    .AddAttribute ("kDefaultInitialRtt",
+    .AddConstructor<QuicSocketState> ()
+    .AddAttribute ("kInitialRtt",
                    "The default RTT used before an RTT sample is taken",
-                   TimeValue (MilliSeconds (100)),
-                   MakeTimeAccessor (&QuicSocketState::m_kDefaultInitialRtt),
+                   TimeValue (MilliSeconds (333)),
+                   MakeTimeAccessor (&QuicSocketState::SetInitialRtt,
+                                     &QuicSocketState::GetInitialRtt),
                    MakeTimeChecker ())
+    .AddAttribute ("kPacketThreshold",
+                   "Maximum reordering in packet number space before loss detection considers a packet lost",
+                   UintegerValue (3),
+                   MakeUintegerAccessor (&QuicSocketState::m_kPacketThreshold),
+                   MakeUintegerChecker<uint32_t> ())
+    .AddAttribute ("kTimeThreshold",
+                   "Maximum reordering in time space before time based loss detection considers a packet lost",
+                   DoubleValue (9.0 / 8),
+                   MakeDoubleAccessor (&QuicSocketState::m_kTimeThreshold),
+                   MakeDoubleChecker<double> (0))
     .AddAttribute ("kMaxPacketsReceivedBeforeAckSend",
                    "The maximum number of packets without sending an ACK",
-                   UintegerValue (20),
+                   UintegerValue (2),
                    MakeUintegerAccessor (&QuicSocketState::m_kMaxPacketsReceivedBeforeAckSend),
                    MakeUintegerChecker<uint32_t> ())
+    .AddAttribute ("kGranularity",
+                   "The clock granularity (default 1 time step)",
+                   TimeValue (TimeStep (1)),
+                   MakeTimeAccessor (&QuicSocketState::m_kGranularity),
+                   MakeTimeChecker ())
+    .AddAttribute ("kPersistentCongestionThreshold",
+                   "Threshold for persistent congestion (default 3)",
+                   UintegerValue (3),
+                   MakeUintegerAccessor (&QuicSocketState::m_kPersistentCongestionThreshold),
+                   MakeUintegerChecker<uint32_t> ())
+    .AddAttribute ("kLossReductionFactor",
+                   "Reduction in congestion window when a new loss event is detected",
+                   DoubleValue (0.5),
+                   MakeDoubleAccessor (&QuicSocketState::m_kLossReductionFactor),
+                   MakeDoubleChecker<double> ())
+    .AddAttribute ("kInitialWindowMultiplier",
+                   "Multiplier for initial window calculation",
+                   UintegerValue (10),
+                   MakeUintegerAccessor (&QuicSocketState::SetInitialWindowMultiplier,
+                                         &QuicSocketState::GetInitialWindowMultiplier),
+                   MakeUintegerChecker<uint32_t> ())
+    .AddAttribute ("kMinimumWindowMultiplier",
+                   "Multiplier for minimum window calculation",
+                   UintegerValue (2),
+                   MakeUintegerAccessor (&QuicSocketState::SetMinimumWindowMultiplier,
+                                         &QuicSocketState::GetMinimumWindowMultiplier),
+                   MakeUintegerChecker<uint32_t> ())
+    .AddTraceSource ("PtoCount",
+                     "The number of consecutive PTOs that have occurred",
+                     MakeTraceSourceAccessor (&QuicSocketState::m_ptoCount),
+                     "ns3::TracedValueCallback::Uint32")
   ;
   return tid;
 }
 
 QuicSocketState::QuicSocketState ()
   : TcpSocketState (),
+    m_kPacketThreshold (3),
+    m_kTimeThreshold (9.0 / 8),
+    m_kInitialRtt (MilliSeconds (333)),
+    m_kGranularity (MilliSeconds (1)),
+    m_kMaxPacketsReceivedBeforeAckSend (20),
+    m_latestRtt (Seconds (0)),
+    m_smoothedRtt (MilliSeconds (333)),
+    m_rttVar (MilliSeconds (333 / 2)),
+    m_firstRttSample (Time::Max ()),
     m_lossDetectionAlarm (),
     m_handshakeCount (0),
-    m_tlpCount (
-      0),
-    m_rtoCount (0),
-    m_largestSentBeforeRto (0),
-    m_timeOfLastSentPacket (
-      Seconds (0)),
+    m_timeOfLastSentAckElicitingPacket (Seconds (0)),
     m_largestAckedPacket (0),
-    m_smoothedRtt (Seconds (0)),
-    m_rttVar (0),
-    m_minRtt (
-      Seconds (0)),
-    m_maxAckDelay (Seconds (0)),
+    m_peerMaxAckDelay (Seconds (0)),
     m_lossTime (Seconds (0)),
-    m_kMinimumWindow (
-      2 * m_segmentSize),
-    m_kLossReductionFactor (0.5),
-    m_endOfRecovery (0),
-    m_kMaxTLPs (
-      2),
-    m_kReorderingThreshold (3),
-    m_kTimeReorderingFraction (9 / 8),
-    m_kUsingTimeLossDetection (
-      false),
-    m_kMinTLPTimeout (MilliSeconds (10)),
-    m_kMinRTOTimeout (
-      MilliSeconds (200)),
-    m_kDelayedAckTimeout (MilliSeconds (25)),
     m_alarmType (0),
     m_nextAlarmTrigger (Seconds (100)),
-    m_kDefaultInitialRtt (
-      MilliSeconds (100)),
-    m_kMaxPacketsReceivedBeforeAckSend (20)
+    m_kInitialWindowMultiplier (10),
+    m_kMinimumWindowMultiplier (2),
+    m_kLossReductionFactor (0.5),
+    m_kPersistentCongestionThreshold (3),
+    m_endOfRecovery (0),
+    m_congestionRecoveryStartTime (Seconds (0)),
+    m_firstLostTime (Seconds (0)),
+    m_ptoCount (0),
+    m_priorInFlight (0)
 {
   m_lossDetectionAlarm.Cancel ();
+
+  // m_minRtt is inherited from TcpSocketState
+  m_minRtt = Time::Max ();
+  m_cWnd = GetInitialWindow();
+  m_ssThresh = m_initialSsThresh;
+  m_pacingRate = m_maxPacingRate;
 }
 
 QuicSocketState::QuicSocketState (const QuicSocketState &other)
   : TcpSocketState (other),
-    m_lossDetectionAlarm (other.m_lossDetectionAlarm),
-    m_handshakeCount (
-      other.m_handshakeCount),
-    m_tlpCount (other.m_tlpCount),
-    m_rtoCount (
-      other.m_rtoCount),
-    m_largestSentBeforeRto (
-      other.m_largestSentBeforeRto),
-    m_timeOfLastSentPacket (
-      other.m_timeOfLastSentPacket),
-    m_largestAckedPacket (
-      other.m_largestAckedPacket),
-    m_smoothedRtt (
-      other.m_smoothedRtt),
+    m_kPacketThreshold (other.m_kPacketThreshold),
+    m_kTimeThreshold (other.m_kTimeThreshold),
+    m_kInitialRtt (other.m_kInitialRtt),
+    m_kGranularity (other.m_kGranularity),
+    m_kMaxPacketsReceivedBeforeAckSend (other.m_kMaxPacketsReceivedBeforeAckSend),
+    m_latestRtt (other.m_latestRtt),
+    m_smoothedRtt (other.m_smoothedRtt),
     m_rttVar (other.m_rttVar),
-    m_minRtt (
-      other.m_minRtt),
-    m_maxAckDelay (other.m_maxAckDelay),
-    m_lossTime (
-      other.m_lossTime),
-    m_kMinimumWindow (other.m_kMinimumWindow),
-    m_kLossReductionFactor (
-      other.m_kLossReductionFactor),
-    m_endOfRecovery (
-      other.m_endOfRecovery),
-    m_kMaxTLPs (other.m_kMaxTLPs),
-    m_kReorderingThreshold (
-      other.m_kReorderingThreshold),
-    m_kTimeReorderingFraction (
-      other.m_kTimeReorderingFraction),
-    m_kUsingTimeLossDetection (
-      other.m_kUsingTimeLossDetection),
-    m_kMinTLPTimeout (
-      other.m_kMinTLPTimeout),
-    m_kMinRTOTimeout (other.m_kMinRTOTimeout),
-    m_kDelayedAckTimeout (
-      other.m_kDelayedAckTimeout),
-    m_kDefaultInitialRtt (
-      other.m_kDefaultInitialRtt),
-    m_kMaxPacketsReceivedBeforeAckSend (other.m_kMaxPacketsReceivedBeforeAckSend)
+    m_firstRttSample (other.m_firstRttSample),
+    m_lossDetectionAlarm (),
+    m_handshakeCount (other.m_handshakeCount),
+    m_timeOfLastSentAckElicitingPacket (other.m_timeOfLastSentAckElicitingPacket),
+    m_largestAckedPacket (other.m_largestAckedPacket),
+    m_peerMaxAckDelay (other.m_peerMaxAckDelay),
+    m_lossTime (other.m_lossTime),
+    m_alarmType (other.m_alarmType),
+    m_nextAlarmTrigger (other.m_nextAlarmTrigger),
+    m_kInitialWindowMultiplier (other.m_kInitialWindowMultiplier),
+    m_kMinimumWindowMultiplier (other.m_kMinimumWindowMultiplier),
+    m_kLossReductionFactor (other.m_kLossReductionFactor),
+    m_kPersistentCongestionThreshold (other.m_kPersistentCongestionThreshold),
+    m_endOfRecovery (other.m_endOfRecovery),
+    m_congestionRecoveryStartTime (other.m_congestionRecoveryStartTime),
+    m_firstLostTime (other.m_firstLostTime),
+    m_ptoCount (other.m_ptoCount.Get ()),
+    m_priorInFlight (other.m_priorInFlight)
 {
   m_lossDetectionAlarm.Cancel ();
+  m_cWnd = GetInitialWindow();
+  m_ssThresh = m_initialSsThresh;
+  m_pacingRate = m_maxPacingRate;
+}
+
+void
+QuicSocketState::SetInitialWindowMultiplier (uint32_t multiplier)
+{
+  m_kInitialWindowMultiplier = multiplier;
+  if (m_delivered == 0)
+    {
+      m_cWnd = GetInitialWindow ();
+    }
+}
+
+void
+QuicSocketState::SetMinimumWindowMultiplier (uint32_t multiplier)
+{
+  m_kMinimumWindowMultiplier = multiplier;
+}
+
+uint32_t
+QuicSocketState::GetInitialWindowMultiplier (void) const
+{
+  return m_kInitialWindowMultiplier;
+}
+
+uint32_t
+QuicSocketState::GetMinimumWindowMultiplier (void) const
+{
+  return m_kMinimumWindowMultiplier;
+}
+
+void
+QuicSocketState::SetInitialRtt (Time initialRtt)
+{
+  m_kInitialRtt = initialRtt;
+  m_smoothedRtt = initialRtt;
+  m_rttVar = initialRtt / 2;
+}
+
+Time
+QuicSocketState::GetInitialRtt (void) const
+{
+  return m_kInitialRtt;
+}
+
+uint32_t
+QuicSocketState::GetMinimumWindow () const
+{
+  return m_kMinimumWindowMultiplier * m_segmentSize;
+}
+
+uint32_t
+QuicSocketState::GetInitialWindow () const
+{
+  if (m_kInitialWindowMultiplier <= 10)
+    {
+      // RFC 9002 formula
+      return std::min (m_kInitialWindowMultiplier * m_segmentSize, 
+                       std::max (GetMinimumWindow (), 14720U));
+    }
+  else
+    {
+      uint32_t initialCwnd = m_kInitialWindowMultiplier * m_segmentSize;
+      NS_LOG_WARN("Using experimental Initial CWND value " << initialCwnd << "B");
+      return initialCwnd;
+    }
 }
 
 QuicSocketBase::QuicSocketBase (void)
   : QuicSocket (),
-    m_endPoint (0),
-    m_endPoint6 (0),
-    m_node (0),
-    m_quicl4 (0),
-    m_quicl5 (0),
-    m_socketState (
-      IDLE),
-    m_transportErrorCode (
-      QuicSubheader::TransportErrorCodes_t::NO_ERROR),
-    m_serverBusy (false),
-    m_errno (
-      ERROR_NOTERROR),
+    m_endPoint (nullptr),
+    m_endPoint6 (nullptr),
+    m_node (nullptr),
+    m_quicl4 (nullptr),
+    m_quicl5 (nullptr),
+    // Rx and Tx buffer management
+    m_rxBuffer (CreateObject<QuicSocketRxBuffer> ()),
+    m_txBuffer (CreateObject<QuicSocketTxBuffer> ()),
+    m_socketTxBufferSize (131072), // Default 128KB
+    m_socketRxBufferSize (131072), // Default 128KB
+    m_schedulingTypeId (QuicSocketTxScheduler::GetTypeId ()),
+    m_defaultLatency (MilliSeconds (100)),
+    m_bytesRead (0),
+    // State-related attributes
+    m_handshakeDoneSent (false),
+    m_handshakeConfirmed (false),
+    m_socketState (IDLE),
+    m_transportErrorCode (QuicSubheader::TransportErrorCodes_t::NO_ERROR),
+    m_errno (ERROR_NOTERROR),
     m_connected (false),
     m_connectionId (0),
-    m_vers (
-      QUIC_VERSION_NS3_IMPL),
+    m_vers (QUIC_VERSION),
     m_keyPhase (QuicHeader::PHASE_ZERO),
-    m_lastReceived (Seconds (0.0)),
-    m_initial_max_stream_data (
-      0),
+    m_isServer (false),
+    m_lastReceived (Seconds (0)),
+    // Transport Parameters values
+    m_initial_max_stream_data (0),
     m_max_data (0),
     m_initial_max_stream_id_bidi (0),
-    m_idleTimeout (
-      Seconds (300.0)),
-    m_omit_connection_id (false),
-    m_ack_delay_exponent (
-      3),
+    m_idleTimeout (Seconds (300.0)),
+    m_ack_delay_exponent (3),
+    m_max_ack_delay (MilliSeconds (25)),
     m_initial_max_stream_id_uni (0),
     m_maxTrackedGaps (20),
-    m_receivedTransportParameters (
-      false),
-    m_couldContainTransportParameters (true),
-    m_rto (
-      Seconds (30.0)),
+    // Transport Parameters management
+    m_receivedTransportParameters (false),
+    // Timers and Events
+    m_idleTimeoutEvent (),
+    m_drainingPeriodEvent (),
     m_drainingPeriodTimeout (Seconds (90.0)),
+    m_flushOnClose (false),
     m_closeOnEmpty (false),
-    m_congestionControl (
-      0),
+    // Congestion Control
+    m_tcb (CreateObject<QuicSocketState> ()),
+    m_congestionControl (CreateObject<QuicCongestionOps> ()),
     m_lastRtt (Seconds (0.0)),
-    m_queue_ack (false),
-    m_numPacketsReceivedSinceLastAckSent (0),
+    m_quicCongestionControlLegacy (false),
+    m_lastMaxData (0),
+    m_maxDataInterval (10),
+    m_initialPacketSize (1200),
     m_pacingTimer (Timer::REMOVE_ON_DESTROY)
 {
   NS_LOG_FUNCTION (this);
 
+  m_txBuffer->SetSocket (this);
+  m_txBuffer->SetMaxBufferSize (m_socketTxBufferSize);
+  m_rxBuffer->SetMaxBufferSize (m_socketRxBufferSize);
 
-  m_rxBuffer = CreateObject<QuicSocketRxBuffer> ();
-  m_txBuffer = CreateObject<QuicSocketTxBuffer> ();
-  m_receivedPacketNumbers = std::vector<SequenceNumber32> ();
-
-  m_tcb = CreateObject<QuicSocketState> ();
-  m_tcb->m_cWnd = m_tcb->m_initialCWnd;
-  m_tcb->m_ssThresh = m_tcb->m_initialSsThresh;
-  m_quicCongestionControlLegacy = false;
-  m_txBuffer->SetQuicSocketState (m_tcb);
-
-  m_tcb->m_pacingRate = m_tcb->m_maxPacingRate;
-  m_pacingTimer.SetFunction (&QuicSocketBase::NotifyPacingPerformed, this);
-
-  /**
-   * [IETF DRAFT 10 - Quic Transport: sec 5.7.1]
-   *
-   * The initial number for a packet number MUST be selected randomly from a range between
-   * 0 and 2^32 -1025 (inclusive).
-   * However, in this implementation, we set the sequence number to 0
-   *
-   */
-  if (!m_quicCongestionControlLegacy)
+  for (int i = 0; i < 3; i++)
     {
-      Ptr<UniformRandomVariable> rand =
-        CreateObject<UniformRandomVariable> ();
-      m_tcb->m_nextTxSequence = SequenceNumber32 (0);
-      // (uint32_t) rand->GetValue (0, pow (2, 32) - 1025));
+      m_pnSpaces[i] = QuicPacketNumberSpace ();
     }
 
+  m_txBuffer->SetQuicSocketState (m_tcb);
+
+  m_pacingTimer.SetFunction (&QuicSocketBase::NotifyPacingPerformed, this);
+
+  if (!m_quicCongestionControlLegacy)
+    {
+      for (int i = 0; i < 3; i++)
+        {
+          m_pnSpaces[i].m_nextTxSequence = SequenceNumber32 (0);
+        }
+      m_tcb->m_nextTxSequence = SequenceNumber32 (0);
+    }
+
+  ConnectTcbTraces ();
+}
+
+QuicSocketBase::QuicSocketBase (const QuicSocketBase& sock)   // Copy constructor
+  : QuicSocket (sock),
+    m_endPoint (nullptr),
+    m_endPoint6 (nullptr),
+    m_node (sock.m_node),
+    m_quicl4 (sock.m_quicl4),
+    m_quicl5 (nullptr),
+    // Buffers copied later
+    m_socketTxBufferSize (sock.m_socketTxBufferSize),
+    m_socketRxBufferSize (sock.m_socketRxBufferSize),
+    m_schedulingTypeId (sock.m_schedulingTypeId),
+    m_defaultLatency (sock.m_defaultLatency),
+    m_bytesRead (0), // New socket starts fresh
+    // State
+    m_handshakeDoneSent (sock.m_handshakeDoneSent),
+    m_handshakeConfirmed (sock.m_handshakeConfirmed),
+    m_socketState (LISTENING),
+    m_transportErrorCode (sock.m_transportErrorCode),
+    m_errno (sock.m_errno),
+    m_connected (sock.m_connected),
+    m_connectionId (0),
+    m_vers (sock.m_vers),
+    m_keyPhase (QuicHeader::PHASE_ZERO),
+    m_isServer (false),
+    m_lastReceived (sock.m_lastReceived),
+    // Transport Params
+    m_initial_max_stream_data (sock.m_initial_max_stream_data),
+    m_max_data (sock.m_max_data),
+    m_initial_max_stream_id_bidi (sock.m_initial_max_stream_id_bidi),
+    m_idleTimeout (sock.m_idleTimeout),
+    m_ack_delay_exponent (sock.m_ack_delay_exponent),
+    m_max_ack_delay (sock.m_max_ack_delay),
+    m_initial_max_stream_id_uni (sock.m_initial_max_stream_id_uni),
+    m_maxTrackedGaps (sock.m_maxTrackedGaps),
+    // Transport Params Management
+    m_receivedTransportParameters (sock.m_receivedTransportParameters),
+    // Timers
+    m_idleTimeoutEvent (),
+    m_drainingPeriodEvent (),
+    m_drainingPeriodTimeout (sock.m_drainingPeriodTimeout),
+    m_flushOnClose (sock.m_flushOnClose),
+    m_closeOnEmpty (sock.m_closeOnEmpty),
+    // Congestion Control
+    m_tcb (CopyObject (sock.m_tcb)),
+    m_congestionControl (nullptr),
+    m_lastRtt (sock.m_lastRtt),
+    m_quicCongestionControlLegacy (sock.m_quicCongestionControlLegacy),
+    m_lastMaxData (0),
+    m_maxDataInterval (10),
+    m_initialPacketSize (sock.m_initialPacketSize),
+    m_pacingTimer (Timer::REMOVE_ON_DESTROY)
+{
+  NS_LOG_FUNCTION (this);
+
+  m_txBuffer = CopyObject (sock.m_txBuffer);
+  m_rxBuffer = CopyObject (sock.m_rxBuffer);
+  
+  if (sock.m_congestionControl)
+    {
+      m_congestionControl = sock.m_congestionControl->Fork ();
+    }
+  else
+    {
+      m_congestionControl = CreateObject<QuicCongestionOps> ();
+    }
+  
+  m_txBuffer->SetQuicSocketState (m_tcb);
+  m_pacingTimer.SetFunction (&QuicSocketBase::NotifyPacingPerformed, this);
+
+  if (!m_quicCongestionControlLegacy)
+    {
+      for (int i = 0; i < 3; i++)
+        {
+          m_pnSpaces[i].m_nextTxSequence = SequenceNumber32 (0);
+        }
+      m_tcb->m_nextTxSequence = SequenceNumber32 (0);
+    }
+
+  ConnectTcbTraces ();
+  
+  m_txTrace = sock.m_txTrace;
+  m_rxTrace = sock.m_rxTrace;
+}
+
+void
+QuicSocketBase::ConnectTcbTraces ()
+{
+  NS_LOG_FUNCTION (this);
   // connect callbacks
   bool ok;
   ok = m_tcb->TraceConnectWithoutContext ("CongestionWindow",
@@ -532,108 +624,32 @@ QuicSocketBase::QuicSocketBase (void)
                                           MakeCallback (&QuicSocketBase::UpdateHighTxMark, this));
   NS_ASSERT_MSG (ok == true, "Failed connection to highest sequence trace");
 
-}
+  ok = m_tcb->TraceConnectWithoutContext ("BytesInFlight",
+                                          MakeCallback (&QuicSocketBase::UpdateBytesInFlight, this));
+  NS_ASSERT_MSG (ok == true, "Failed connection to bytes in flight trace");
 
-QuicSocketBase::QuicSocketBase (const QuicSocketBase& sock)   // Copy constructor
-  : QuicSocket (sock),
-    m_endPoint (0),
-    m_endPoint6 (0),
-    m_node (sock.m_node),
-    m_quicl4 (sock.m_quicl4),
-    m_quicl5 (0),
-    m_socketState (LISTENING),
-    m_transportErrorCode (sock.m_transportErrorCode),
-    m_serverBusy (sock.m_serverBusy),
-    m_errno (sock.m_errno),
-    m_connected (sock.m_connected),
-    m_connectionId (0),
-    m_vers (sock.m_vers),
-    m_keyPhase (QuicHeader::PHASE_ZERO),
-    m_lastReceived (sock.m_lastReceived),
-    m_initial_max_stream_data (sock.m_initial_max_stream_data),
-    m_max_data (sock.m_max_data),
-    m_initial_max_stream_id_bidi (sock.m_initial_max_stream_id_bidi),
-    m_idleTimeout (sock.m_idleTimeout),
-    m_omit_connection_id (sock.m_omit_connection_id),
-    m_ack_delay_exponent (sock.m_ack_delay_exponent),
-    m_initial_max_stream_id_uni (sock.m_initial_max_stream_id_uni),
-    m_maxTrackedGaps (sock.m_maxTrackedGaps),
-    m_receivedTransportParameters (sock.m_receivedTransportParameters),
-    m_couldContainTransportParameters (sock.m_couldContainTransportParameters),
-    m_rto (sock.m_rto),
-    m_drainingPeriodTimeout (sock.m_drainingPeriodTimeout),
-    m_closeOnEmpty (sock.m_closeOnEmpty),
-    m_lastRtt (sock.m_lastRtt),
-    m_quicCongestionControlLegacy (sock.m_quicCongestionControlLegacy),
-    m_queue_ack (sock.m_queue_ack),
-    m_numPacketsReceivedSinceLastAckSent (sock.m_numPacketsReceivedSinceLastAckSent),
-    m_lastMaxData(0),
-    m_maxDataInterval(10),
-    m_pacingTimer (Timer::REMOVE_ON_DESTROY),
-    m_txTrace (sock.m_txTrace),
-    m_rxTrace (sock.m_rxTrace)
-{
-  NS_LOG_FUNCTION (this);
-
-//  Callback<void, Ptr< Socket > > vPS = MakeNullCallback<void, Ptr<Socket> > ();
-//  Callback<void, Ptr<Socket>, const Address &> vPSA = MakeNullCallback<void, Ptr<Socket>, const Address &> ();
-//  Callback<void, Ptr<Socket>, uint32_t> vPSUI = MakeNullCallback<void, Ptr<Socket>, uint32_t> ();
-//  SetConnectCallback (vPS, vPS);
-//  SetDataSentCallback (vPSUI);
-//  SetSendCallback (vPSUI);
-//  SetRecvCallback (vPS);
-  m_txBuffer = CopyObject (sock.m_txBuffer);
-  m_rxBuffer = CopyObject (sock.m_rxBuffer);
-  m_receivedPacketNumbers = std::vector<SequenceNumber32> ();
-
-  m_tcb = CopyObject (sock.m_tcb);
-  if (sock.m_congestionControl)
-    {
-      m_congestionControl = sock.m_congestionControl->Fork ();
-    }
-  m_quicCongestionControlLegacy = sock.m_quicCongestionControlLegacy;
-  m_txBuffer->SetQuicSocketState (m_tcb);
-
-  m_tcb->m_pacingRate = m_tcb->m_maxPacingRate;
-  m_pacingTimer.SetFunction (&QuicSocketBase::NotifyPacingPerformed, this);
-
-  /**
-   * [IETF DRAFT 10 - Quic Transport: sec 5.7.1]
-   *
-   * The initial value for a packet number MUST be selected randomly from a range between
-   * 0 and 2^32 -1025 (inclusive).
-   *
-   */
-  if (!m_quicCongestionControlLegacy)
-    {
-      Ptr<UniformRandomVariable> rand =
-        CreateObject<UniformRandomVariable> ();
-      m_tcb->m_nextTxSequence = SequenceNumber32 (0);
-      // (uint32_t) rand->GetValue (0, pow (2, 32) - 1025));
-    }
+  ok = m_tcb->TraceConnectWithoutContext ("PtoCount",
+                                          MakeCallback (&QuicSocketBase::UpdatePtoCount, this));
+  NS_ASSERT_MSG (ok == true, "Failed connection to PTO count trace");
 }
 
 QuicSocketBase::~QuicSocketBase (void)
 {
   NS_LOG_FUNCTION (this);
-
   m_node = 0;
-  if (m_endPoint != nullptr)
+  if (m_endPoint)
     {
-      NS_ASSERT (m_quicl4 != nullptr);
-      NS_ASSERT (m_endPoint != nullptr);
+      NS_ASSERT (m_quicl4);
       m_quicl4->DeAllocate (m_endPoint);
-      NS_ASSERT (m_endPoint == nullptr);
+      m_endPoint = 0;
     }
-  if (m_endPoint6 != nullptr)
+  if (m_endPoint6)
     {
-      NS_ASSERT (m_quicl4 != nullptr);
-      NS_ASSERT (m_endPoint6 != nullptr);
+      NS_ASSERT (m_quicl4);
       m_quicl4->DeAllocate (m_endPoint6);
-      NS_ASSERT (m_endPoint6 == nullptr);
+      m_endPoint6 = 0;
     }
   m_quicl4 = 0;
-  //CancelAllTimers ();
   m_pacingTimer.Cancel ();
 }
 
@@ -648,8 +664,9 @@ QuicSocketBase::Bind (void)
       m_errno = ERROR_ADDRNOTAVAIL;
       return -1;
     }
-
-  m_quicl4->UdpBind (this);
+  // Bind ussing allocated address and port
+  InetSocketAddress allocatedAddr (m_endPoint->GetLocalAddress (), m_endPoint->GetLocalPort ());
+  m_quicl4->UdpBind (allocatedAddr, this);
   return SetupCallback ();
 }
 
@@ -717,8 +734,22 @@ QuicSocketBase::Bind (const Address &address)
       m_errno = ERROR_INVAL;
       return -1;
     }
-
-  m_quicl4->UdpBind (address, this);
+  // Bind ussing allocated address and port
+  if (m_endPoint6)
+    {
+      Inet6SocketAddress allocatedAddr (m_endPoint6->GetLocalAddress (), m_endPoint6->GetLocalPort ());
+      m_quicl4->UdpBind (allocatedAddr, this);
+    }
+  else if (m_endPoint)
+    {
+      InetSocketAddress allocatedAddr (m_endPoint->GetLocalAddress (), m_endPoint->GetLocalPort ());
+      m_quicl4->UdpBind (allocatedAddr, this);
+    }
+  else
+    {
+      // Fallback
+      m_quicl4->UdpBind (address, this);
+    }
   return SetupCallback ();
 }
 
@@ -732,8 +763,9 @@ QuicSocketBase::Bind6 (void)
       m_errno = ERROR_ADDRNOTAVAIL;
       return -1;
     }
-
-  m_quicl4->UdpBind6 (this);
+  // Bind ussing allocated address and port
+  Inet6SocketAddress allocatedAddr (m_endPoint6->GetLocalAddress (), m_endPoint6->GetLocalPort ());
+  m_quicl4->UdpBind (allocatedAddr, this);
   return SetupCallback ();
 }
 
@@ -776,26 +808,17 @@ QuicSocketBase::Connect (const Address & address)
 
   if (InetSocketAddress::IsMatchingType (address))
     {
-      if (m_endPoint == nullptr)
+      if (!m_endPoint)
         {
           if (Bind () == -1)
             {
-              NS_ASSERT (m_endPoint == nullptr);
+              NS_ASSERT (!m_endPoint);
               return -1; // Bind() failed
             }
-          NS_ASSERT (m_endPoint != nullptr);
+          NS_ASSERT (m_endPoint);
         }
       InetSocketAddress transport = InetSocketAddress::ConvertFrom (address);
       m_endPoint->SetPeer (transport.GetIpv4 (), transport.GetPort ());
-      //SetIpTos (transport.GetTos ());
-      m_endPoint6 = nullptr;
-
-      // Get the appropriate local address and port number from the routing protocol and set up endpoint
-      /*if (SetupEndpoint () != 0)
-        {
-          NS_LOG_ERROR ("Route to destination does not exist ?!");
-          return -1;
-        }*/
     }
   else if (Inet6SocketAddress::IsMatchingType (address))
     {
@@ -809,24 +832,16 @@ QuicSocketBase::Connect (const Address & address)
           return Connect (InetSocketAddress (v4Addr, transport.GetPort ()));
         }
 
-      if (m_endPoint6 == nullptr)
+      if (!m_endPoint6)
         {
           if (Bind6 () == -1)
             {
-              NS_ASSERT (m_endPoint6 == nullptr);
+              NS_ASSERT (!m_endPoint6);
               return -1; // Bind() failed
             }
-          NS_ASSERT (m_endPoint6 != nullptr);
+          NS_ASSERT (m_endPoint6);
         }
       m_endPoint6->SetPeer (v6Addr, transport.GetPort ());
-      m_endPoint = nullptr;
-
-      // Get the appropriate local address and port number from the routing protocol and set up endpoint
-      /*if (SetupEndpoint6 () != 0)
-        {
-          NS_LOG_ERROR ("Route to destination does not exist ?!");
-          return -1;
-        }*/
     }
   else
     {
@@ -840,35 +855,46 @@ QuicSocketBase::Connect (const Address & address)
       m_socketType = CLIENT;
     }
 
-  if (m_quicl5 == 0)
+  if (!m_quicl5)
     {
       m_quicl5 = CreateStreamController ();
-      m_quicl5->CreateStream (QuicStream::BIDIRECTIONAL, 0);   // Create Stream 0 (necessary)
     }
 
-  // check if the address is in a list of known and authenticated addresses
-  auto result = std::find (
-    m_quicl4->GetAuthAddresses ().begin (), m_quicl4->GetAuthAddresses ().end (),
-    InetSocketAddress::ConvertFrom (address).GetIpv4 ());
-
-  if (result != m_quicl4->GetAuthAddresses ().end ()
-      || m_quicl4->Is0RTTHandshakeAllowed ())
+  // 1. Check if 0-RTT handshake flag is active (it bypasses the authenticated list and does 0-RTT always)
+  if (m_quicl4->Is0RTTHandshakeAllowed ())
     {
-      NS_LOG_INFO (
-        "CONNECTION AUTHENTICATED Client found the Server " << InetSocketAddress::ConvertFrom (address).GetIpv4 () << " port " << InetSocketAddress::ConvertFrom (address).GetPort () << " in authenticated list");
-      // connect the underlying UDP socket
+      NS_LOG_INFO ("Proceeding with 0-RTT Handshake: 0-RTT Handshake flag bypasses authenticated address check");
       m_quicl4->UdpConnect (address, this);
       return DoFastConnect ();
     }
-  else
+  // 2. Extract IPv4/IPv6 address
+  Address ipAddressToCheck;
+  if (InetSocketAddress::IsMatchingType (address))
     {
-      NS_LOG_INFO (
-        "CONNECTION not authenticated: cannot perform 0-RTT Handshake");
-      // connect the underlying UDP socket
-      m_quicl4->UdpConnect (address, this);
-      return DoConnect ();
+      ipAddressToCheck = InetSocketAddress::ConvertFrom (address).GetIpv4 ();
+    }
+  else if (Inet6SocketAddress::IsMatchingType (address))
+    {
+      ipAddressToCheck = Inet6SocketAddress::ConvertFrom (address).GetIpv6 ();
     }
 
+  // 3. Check for it in the authenticated addresses list
+  auto result = std::find (
+    m_quicl4->GetAuthAddresses ().begin (), m_quicl4->GetAuthAddresses ().end (),
+    ipAddressToCheck);
+
+  if (result != m_quicl4->GetAuthAddresses ().end ())
+    {
+      NS_LOG_INFO ("Proceeding with 0-RTT Handshake: Client found the Server in authenticated list");
+      m_quicl4->UdpConnect (address, this);
+      return DoFastConnect ();
+    }
+
+  // Otherwise, proceed with 1-RTT Handshake
+  NS_LOG_DEBUG ("CONNECTION not authenticated: cannot perform 0-RTT Handshake");
+  // connect the underlying UDP socket
+  m_quicl4->UdpConnect (address, this);
+  return DoConnect ();
 }
 
 /* Inherit from Socket class: Invoked by upper-layer application */
@@ -912,45 +938,33 @@ QuicSocketBase::Send (Ptr<Packet> p)
 }
 
 int
-QuicSocketBase::AppendingTx (Ptr<Packet> frame)
+QuicSocketBase::AppendingTx (Ptr<Packet> frame, PacketNumberSpace space)
 {
-  NS_LOG_FUNCTION (this);
+  NS_LOG_FUNCTION (this << space);
 
   if (m_socketState != IDLE)
     {
-      bool done = m_txBuffer->Add (frame);
+      bool done = m_txBuffer->Add (frame, space);
       if (!done)
         {
           NS_LOG_INFO ("Exceeding Socket Tx Buffer Size");
           m_errno = ERROR_MSGSIZE;
+          return -1;
         }
       else
         {
           uint32_t win = AvailableWindow ();
           NS_LOG_DEBUG (
             "Added packet to the buffer - txBufSize = " << m_txBuffer->AppSize ()
-                                                        << " AvailableWindow = " << win << " state " << QuicStateName[m_socketState]);
-        }
+                                                        << " Window = " << win);
 
-
-      if (m_socketState != IDLE)
-        {
-          if (!m_sendPendingDataEvent.IsRunning ())
-            {
-              m_sendPendingDataEvent = Simulator::Schedule (
-                TimeStep (1), &QuicSocketBase::SendPendingData, this,
-                m_connected);
-            }
-        }
-      if (done)
-        {
+          // Artificially delay the "flush" so that L5 has finished putting app bytes in to the buffer
+          Simulator::Schedule (MicroSeconds (1), &QuicSocketBase::SendPendingData, this, m_connected);
           return frame->GetSize ();
         }
-      return -1;
     }
   else
     {
-
       NS_ABORT_MSG ("Sending in state" << QuicStateName[m_socketState]);
       return -1;
     }
@@ -969,138 +983,75 @@ QuicSocketBase::SendPendingData (bool withAck)
           SendConnectionClosePacket (0, "Scheduled connection close - no error");
         }
       NS_LOG_INFO ("Nothing to send");
-      return false;
+      return 0;
     }
 
   uint32_t nPacketsSent = 0;
 
-  // prioritize stream 0
-  while (m_txBuffer->GetNumFrameStream0InBuffer () > 0)
+  // 1. prioritize INITIAL_DATA (handshake data)
+  while (m_txBuffer->GetNumCryptoFramesInBuffer (INITIAL_DATA) > 0)
     {
-      // check pacing timer
-      if (m_tcb->m_pacing)
-        {
-          NS_LOG_DEBUG ("Pacing is enabled");
-          if (m_pacingTimer.IsRunning ())
-            {
-              NS_LOG_INFO ("Skipping Packet due to pacing - for " << m_pacingTimer.GetDelayLeft ());
-              break;
-            }
-          NS_LOG_DEBUG ("Pacing Timer is not running");
-        }
+      if (m_drainingPeriodEvent.IsRunning ()) return 0;
+      if (m_tcb->m_pacing && m_pacingTimer.IsRunning ()) break;
 
-      NS_LOG_DEBUG ("Send a frame for stream 0");
-      SequenceNumber32 next = ++m_tcb->m_nextTxSequence;
-      NS_LOG_INFO ("SN " << m_tcb->m_nextTxSequence);
-
-      uint32_t win = AvailableWindow ();
-      uint32_t connWin = ConnectionWindow ();
-      uint32_t bytesInFlight = BytesInFlight ();
-      NS_LOG_DEBUG (
-        "BEFORE stream 0 Available Window " << win
-                                            << " Connection RWnd " << connWin
-                                            << " BytesInFlight " << bytesInFlight
-                                            << " BufferedSize " << m_txBuffer->AppSize ()
-                                            << " MaxPacketSize " << GetSegSize ());
-
-      // uint32_t sz =
-      SendDataPacket (next, 0, m_queue_ack);
-
-      win = AvailableWindow ();
-      connWin = ConnectionWindow ();
-      bytesInFlight = BytesInFlight ();
-      NS_LOG_DEBUG (
-        "AFTER stream 0 Available Window " << win
-                                           << " Connection RWnd " << connWin
-                                           << " BytesInFlight " << bytesInFlight
-                                           << " BufferedSize " << m_txBuffer->AppSize ()
-                                           << " MaxPacketSize " << GetSegSize ());
-
-      ++nPacketsSent;
+      uint32_t sent = SendDataPacket (INITIAL_DATA, GetSegSize (), withAck);
+      if (sent > 0) nPacketsSent++;
+      else break;
     }
-  uint32_t availableWindow = AvailableWindow ();
 
-  while (availableWindow > 0 and m_txBuffer->AppSize () > 0)
+  // 2. prioritize HANDSHAKE_DATA (handshake data)
+  while (m_txBuffer->GetNumCryptoFramesInBuffer (HANDSHAKE_DATA) > 0)
+    {
+      if (m_drainingPeriodEvent.IsRunning ()) return 0;
+      if (m_tcb->m_pacing && m_pacingTimer.IsRunning ()) break;
+
+      uint32_t sent = SendDataPacket (HANDSHAKE_DATA, GetSegSize (), withAck);
+      if (sent > 0) nPacketsSent++;
+      else break;
+    }
+
+  // 3. finally, APPLICATION_DATA
+  while (m_txBuffer->AppSize () > 0)
     {
       // check draining period
       if (m_drainingPeriodEvent.IsRunning ())
         {
           NS_LOG_INFO ("Draining period: no packets can be sent");
-          return false;
+          return nPacketsSent;
         }
 
       // check pacing timer
       if (m_tcb->m_pacing)
         {
-          NS_LOG_DEBUG ("Pacing is enabled");
           if (m_pacingTimer.IsRunning ())
             {
               NS_LOG_INFO ("Skipping Packet due to pacing - for " << m_pacingTimer.GetDelayLeft ());
               break;
             }
-          NS_LOG_DEBUG ("Pacing Timer is not running");
         }
 
-      // check the state of the socket!
-      if (m_socketState == CONNECTING_CLT || m_socketState == CONNECTING_SVR)
-        {
-          NS_LOG_INFO ("CONNECTING_CLT and CONNECTING_SVR state; no data to transmit");
-          break;
-        }
-
-      uint32_t availableData = m_txBuffer->AppSize ();
-
-      if (availableData < availableWindow and !m_closeOnEmpty)
-        {
-          NS_LOG_INFO ("Ask the app for more data before trying to send");
-          NotifySend (GetTxAvailable ());
-        }
-
-      if (availableWindow < GetSegSize () and availableData > availableWindow and !m_closeOnEmpty)
-        {
-          NS_LOG_INFO ("Preventing Silly Window Syndrome. Wait to Send.");
-          break;
-        }
-
-      SequenceNumber32 next = ++m_tcb->m_nextTxSequence;
-
-      uint32_t s = std::min (availableWindow, GetSegSize ());
-
+      // check congestion window
       uint32_t win = AvailableWindow ();
-      uint32_t connWin = ConnectionWindow ();
-      uint32_t bytesInFlight = BytesInFlight ();
-      NS_LOG_DEBUG (
-        "BEFORE Available Window " << win
-                                   << " Connection RWnd " << connWin
-                                   << " BytesInFlight " << bytesInFlight
-                                   << " BufferedSize " << m_txBuffer->AppSize ()
-                                   << " MaxPacketSize " << GetSegSize ());
+      // Here we check for a minimum window size to avoid Silly Window Syndrome
+      uint32_t minRequiredBytes = 30; // Short QUIC header (~15B) + frame overhead + mínim payload
+      if (win < minRequiredBytes) 
+        {
+          NS_LOG_DEBUG ("Skipping Packet due to insufficient window (" << win << " bytes available)");
+          break;
+        }
 
-      // uint32_t sz =
-      SendDataPacket (next, s, withAck);
-
-      win = AvailableWindow ();
-      connWin = ConnectionWindow ();
-      bytesInFlight = BytesInFlight ();
-      NS_LOG_DEBUG (
-        "AFTER Available Window " << win
-                                  << " Connection RWnd " << connWin
-                                  << " BytesInFlight " << bytesInFlight
-                                  << " BufferedSize " << m_txBuffer->AppSize ()
-                                  << " MaxPacketSize " << GetSegSize ());
-
-      ++nPacketsSent;
-
-      availableWindow = AvailableWindow ();
-    }
-
-  if (nPacketsSent > 0)
-    {
-      NS_LOG_INFO ("SendPendingData sent " << nPacketsSent << " packets");
-    }
-  else
-    {
-      NS_LOG_INFO ("SendPendingData no packets sent");
+      // Cap the packet size at the window OR the segment size
+      uint32_t sendSize = std::min (win, GetSegSize ());
+      // Pass sendSize to SendDataPacket instead of GetSegSize()
+      uint32_t sent = SendDataPacket (APPLICATION_DATA, sendSize, withAck);
+      if (sent > 0)
+        {
+          nPacketsSent++;
+        }
+      else
+        {
+          break;
+        }
     }
 
   return nPacketsSent;
@@ -1114,9 +1065,10 @@ QuicSocketBase::SetSegSize (uint32_t size)
                        "Cannot change segment size dynamically.");
 
   m_tcb->m_segmentSize = size;
-  // Update minimum congestion window
-  m_tcb->m_initialCWnd = 2 * size;
-  m_tcb->m_kMinimumWindow = 2 * size;
+  if (m_socketState == IDLE)
+    {
+      m_tcb->m_cWnd = m_tcb->GetInitialWindow ();
+    }
 }
 
 uint32_t
@@ -1126,274 +1078,266 @@ QuicSocketBase::GetSegSize (void) const
 }
 
 void
-QuicSocketBase::MaybeQueueAck ()
+QuicSocketBase::MaybeQueueAck (PacketNumberSpace space, bool isOutOfOrder)
 {
-  NS_LOG_FUNCTION (this);
-  ++m_numPacketsReceivedSinceLastAckSent;
-  NS_LOG_INFO ("m_numPacketsReceivedSinceLastAckSent " << m_numPacketsReceivedSinceLastAckSent << " m_queue_ack " << m_queue_ack);
+  NS_LOG_FUNCTION (this << space);
+  QuicPacketNumberSpace &pnSpace = m_pnSpaces[space];
+  
+  ++pnSpace.m_numPacketsReceivedSinceLastAckSent;
+  NS_LOG_INFO ("space " << space << " numPacketsReceived " << pnSpace.m_numPacketsReceivedSinceLastAckSent << " queueAck " << pnSpace.m_queue_ack);
 
-  // handle the list of m_receivedPacketNumbers
-  if (m_receivedPacketNumbers.empty ())
+  if (pnSpace.m_receivedPacketNumbers.empty ())
     {
-      NS_LOG_INFO ("Nothing to ACK");
-      m_queue_ack = false;
+      NS_LOG_INFO ("Nothing to ACK in space " << space);
+      pnSpace.m_queue_ack = false;
       return;
     }
 
-  // if(m_txBuffer->AppSize() > 0)
-  // {
-  //   NS_LOG_INFO("There are packets to be transmitted in the TX buffer, piggyback the ACK");
-  //   return;
-  // }
-
-  if (m_numPacketsReceivedSinceLastAckSent > m_tcb->m_kMaxPacketsReceivedBeforeAckSend)
+    // ACK already scheduled
+    if (pnSpace.m_sendAckEvent.IsRunning ())
     {
-      NS_LOG_INFO ("immediately send ACK - max number of unacked packets reached");
-      m_queue_ack = true;
-      if (!m_sendAckEvent.IsRunning ())
-        {
-          m_sendAckEvent = Simulator::Schedule (TimeStep (1), &QuicSocketBase::SendAck, this);
-        }
+      return;
     }
 
-  if (HasReceivedMissing ())  // immediately queue the ACK
+if (space == INITIAL_DATA || space == HANDSHAKE_DATA)
     {
-      NS_LOG_INFO ("immediately send ACK - some packets have been received out of order");
-      m_queue_ack = true;
-      if (!m_sendAckEvent.IsRunning ())
-        {
-          m_sendAckEvent = Simulator::Schedule (TimeStep (1), &QuicSocketBase::SendAck, this);
-        }
+      NS_LOG_INFO ("immediately send ACK - Initial/Handshake MUST NOT be delayed");
+      pnSpace.m_queue_ack = true;
+      pnSpace.m_sendAckEvent = Simulator::ScheduleNow(static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
     }
-
-  if (!m_queue_ack)
+  else if (isOutOfOrder)
     {
-      if (m_numPacketsReceivedSinceLastAckSent > 2) // QUIC decimation option
+      NS_LOG_INFO ("immediately send ACK - packet creates or fills a gap");
+      pnSpace.m_queue_ack = true;
+      pnSpace.m_sendAckEvent = Simulator::Schedule (TimeStep (1), static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
+    }
+  else if (pnSpace.m_numPacketsReceivedSinceLastAckSent >= m_tcb->m_kMaxPacketsReceivedBeforeAckSend)
+    {
+      NS_LOG_INFO ("immediately schedule ACK - threshold reached");
+      pnSpace.m_queue_ack = true;
+      pnSpace.m_sendAckEvent = Simulator::ScheduleNow(static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
+    }
+  else
+    {
+      // If non applies, configure delayed ACK
+      pnSpace.m_queue_ack = false;
+      if (!pnSpace.m_delAckEvent.IsRunning ())
         {
-          NS_LOG_INFO ("immediately send ACK - more than 2 packets received");
-          m_queue_ack = true;
-          if (!m_sendAckEvent.IsRunning ())
-            {
-              m_sendAckEvent = Simulator::Schedule (TimeStep (1), &QuicSocketBase::SendAck, this);
-            }
-        }
-      else
-        {
-          if (!m_delAckEvent.IsRunning ())
-            {
-              NS_LOG_INFO ("Schedule a delayed ACK");
-              // schedule a delayed ACK
-              m_delAckEvent = Simulator::Schedule (
-                m_tcb->m_kDelayedAckTimeout, &QuicSocketBase::SendAck, this);
-            }
-          else
-            {
-              NS_LOG_INFO ("Delayed ACK timer already running");
-            }
+          NS_LOG_INFO ("Schedule a delayed ACK for space " << space);
+          pnSpace.m_delAckEvent = Simulator::Schedule (m_max_ack_delay, static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
         }
     }
 }
 
 bool
-QuicSocketBase::HasReceivedMissing ()
+QuicSocketBase::IsOutOfOrder (PacketNumberSpace space, SequenceNumber32 packetNumber)
 {
-  // TODO implement this
+  NS_LOG_FUNCTION (this << space << packetNumber);
+  if (!m_pnSpaces[space].m_receivedPacketNumbers.empty())
+    {
+      SequenceNumber32 prevLargest = m_pnSpaces[space].m_largestReceived;
+      if (packetNumber != prevLargest + 1)
+        {
+          NS_LOG_INFO("Packet number " << packetNumber << " is out of order for space " << space << ". Last number " << prevLargest);
+          return true;
+        }
+    }
   return false;
 }
 
 void
-QuicSocketBase::SendAck ()
+QuicSocketBase::SendAck (PacketNumberSpace space)
 {
-  NS_LOG_FUNCTION (this);
-  m_delAckEvent.Cancel ();
-  m_sendAckEvent.Cancel ();
-  m_queue_ack = false;
+  NS_LOG_FUNCTION (this << space);
+  QuicPacketNumberSpace &pnSpace = m_pnSpaces[space];
+  
+  pnSpace.m_delAckEvent.Cancel ();
+  pnSpace.m_sendAckEvent.Cancel ();
+  pnSpace.m_queue_ack = false;
+  pnSpace.m_numPacketsReceivedSinceLastAckSent = 0;
 
-  m_numPacketsReceivedSinceLastAckSent = 0;
+  if (pnSpace.m_receivedPacketNumbers.empty ())
+    {
+      return;
+    }
 
   Ptr<Packet> p = Create<Packet> ();
-  p->AddAtEnd (OnSendingAckFrame ());
-  SequenceNumber32 packetNumber = ++m_tcb->m_nextTxSequence;
+  p->AddAtEnd (OnSendingAckFrame (space));
+  
+  SequenceNumber32 packetNumber = pnSpace.m_nextTxSequence++;
 
   QuicHeader head;
+  if (space == INITIAL_DATA)
+    {
+      head = QuicHeader::CreateInitial (m_connectionId, m_vers, packetNumber);
+      // Pad Initial ACKs? Usually not required unless it's the very first packet, 
+      // but let's be safe if it's Client speaking.
+      if (m_socketState == CONNECTING_CLT && p->GetSize () + head.GetSerializedSize () < MIN_INITIAL_PACKET_SIZE)
+        {
+          uint32_t padding = MIN_INITIAL_PACKET_SIZE - (p->GetSize () + head.GetSerializedSize ());
+          p->AddAtEnd (Create<Packet> (padding));
+        }
+    }
+  else if (space == HANDSHAKE_DATA)
+    {
+      head = QuicHeader::CreateHandshake (m_connectionId, m_vers, packetNumber);
+    }
+  else
+    {
+      head = QuicHeader::CreateShort (m_connectionId, packetNumber,
+                                      true, m_keyPhase);
+    }
 
-  head = QuicHeader::CreateShort (m_connectionId, packetNumber,
-                                  !m_omit_connection_id, m_keyPhase);
+  uint32_t finalSize = p->GetSize () + head.GetSerializedSize ();
+  m_txBuffer->UpdateAckSent (packetNumber, finalSize, space);
 
-  // if (m_socketState == CONNECTING_SVR)
-  //   {
-  //     m_connected = true;
-  //     head = QuicHeader::CreateHandshake (m_connectionId, m_vers,
-  //                                         packetNumber);
-  //   }
-  // else if (m_socketState == CONNECTING_CLT)
-  //   {
-  //     head = QuicHeader::CreateInitial (m_connectionId, m_vers, packetNumber);
-  //   }
-  // else if (m_socketState == OPEN)
-  //   {
-  //     if (!m_connected and !m_quicl4->Is0RTTHandshakeAllowed ())
-  //       {
-  //         m_connected = true;
-  //         head = QuicHeader::CreateHandshake (m_connectionId, m_vers,
-  //                                             packetNumber);
-  //       }
-  //     else if (!m_connected and m_quicl4->Is0RTTHandshakeAllowed ())
-  //       {
-  //         head = QuicHeader::Create0RTT (m_connectionId, m_vers,
-  //                                        packetNumber);
-  //         m_connected = true;
-  //         m_keyPhase == QuicHeader::PHASE_ONE ? m_keyPhase =
-  //                                                   QuicHeader::PHASE_ZERO :
-  //                                               m_keyPhase =
-  //                                                   QuicHeader::PHASE_ONE;
-  //       }
-  //     else
-  //       {
-  //         head = QuicHeader::CreateShort (m_connectionId, packetNumber,
-  //                                         !m_omit_connection_id, m_keyPhase);
-  //       }
-  //   }
-  // else
-  //   {
-  //     NS_FATAL_ERROR("ACK not possible in this state");
-  //   }
-
-  m_txBuffer->UpdateAckSent (packetNumber, p->GetSerializedSize () + head.GetSerializedSize ());
-
-  NS_LOG_INFO ("Send ACK packet with header " << head);
+  NS_LOG_INFO("QUIC SendAck --> Sent Pkt nº" << packetNumber.GetValue() 
+                << " on space " << space << "(Size: " << finalSize << " bytes)");
   m_quicl4->SendPacket (this, p, head);
   m_txTrace (p, head, this);
 }
 
 uint32_t
-QuicSocketBase::SendDataPacket (SequenceNumber32 packetNumber,
-                                uint32_t maxSize, bool withAck)
+QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool withAck)
 {
-  NS_LOG_FUNCTION (this << packetNumber << maxSize << withAck);
-
-  if (!m_drainingPeriodEvent.IsRunning ())
-    {
-      m_idleTimeoutEvent.Cancel ();
-      NS_LOG_LOGIC (
-        this << " SendDataPacket Schedule Close at time " << Simulator::Now ().GetSeconds () << " to expire at time " << (Simulator::Now () + m_idleTimeout.Get ()).GetSeconds ());
-      m_idleTimeoutEvent = Simulator::Schedule (m_idleTimeout,
-                                                &QuicSocketBase::Close, this);
-    }
-  else
+  if (m_drainingPeriodEvent.IsRunning ())
     {
       NS_LOG_INFO ("Draining period event running");
       return -1;
     }
 
-  Ptr<Packet> p;
+  // Update the Idle Timeout
+  m_idleTimeoutEvent.Cancel ();
+  m_idleTimeoutEvent = Simulator::Schedule (m_idleTimeout, &QuicSocketBase::Close, this);
 
-  if (m_txBuffer->GetNumFrameStream0InBuffer () > 0)
+  // 1. GET THE PACKET NUMBER (DO NOT INCREMENT YET)
+  SequenceNumber32 packetNumber = m_pnSpaces[space].m_nextTxSequence;
+  NS_LOG_FUNCTION (this << space << packetNumber << maxSize << withAck);
+
+  // 2. PREPARE HEADERS AND CALCULATE OVERHEAD
+  QuicHeader head;
+  if (space == INITIAL_DATA)
+    head = QuicHeader::CreateInitial (m_connectionId, m_vers, packetNumber);
+  else if (space == HANDSHAKE_DATA)
+    head = QuicHeader::CreateHandshake (m_connectionId, m_vers, packetNumber);
+  else
     {
-      p = m_txBuffer->NextStream0Sequence (packetNumber);
-      NS_ABORT_MSG_IF (p == 0, "No packet for stream 0 in the buffer!");
+      if (m_socketState == CONNECTING_CLT && !m_connected && m_quicl4->Is0RTTHandshakeAllowed ())
+        head = QuicHeader::Create0RTT (m_connectionId, m_vers, packetNumber);
+      else if (m_socketState == OPEN || m_socketState == CONNECTING_SVR)
+        head = QuicHeader::CreateShort (m_connectionId, packetNumber, true, m_keyPhase);
+      else
+        NS_LOG_WARN ("Trying to send APPLICATION_DATA in an invalid state: " << QuicStateName[m_socketState]);
+    }
+
+  uint32_t headerOverhead = head.GetSerializedSize ();
+  
+  Ptr<Packet> ackFrame = nullptr;
+  uint32_t ackOverhead = 0;
+  if (withAck && !m_pnSpaces[space].m_receivedPacketNumbers.empty ())
+    {
+      ackFrame = OnSendingAckFrame (space);
+      ackOverhead = ackFrame->GetSize ();
+    }
+
+  // 3. CALCULATE THE ACTUAL SPACE AVAILABLE FOR PAYLOAD
+  uint32_t totalOverhead = headerOverhead + ackOverhead;
+  uint32_t payloadMaxSize = (maxSize > totalOverhead) ? (maxSize - totalOverhead) : 0;
+
+  // 4. EXTRACT APPLICATION DATA
+  Ptr<Packet> p;
+  if (m_txBuffer->GetNumCryptoFramesInBuffer (space) > 0)
+    {
+      p = m_txBuffer->NextCryptoSequence (packetNumber, space);
+      if (!p && space == APPLICATION_DATA) 
+        p = m_txBuffer->NextSequence (payloadMaxSize, packetNumber, space);
     }
   else
     {
-      NS_LOG_LOGIC (
-        this << " SendDataPacket - sending packet " << packetNumber.GetValue () << " of size " << maxSize << " at time " << Simulator::Now ().GetSeconds ());
-      m_idleTimeoutEvent = Simulator::Schedule (m_idleTimeout,
-                                                &QuicSocketBase::Close, this);
-      p = m_txBuffer->NextSequence (maxSize, packetNumber);
+      p = m_txBuffer->NextSequence (payloadMaxSize, packetNumber, space);
+    }
+
+  // 5. ABORT CHECKS (GUARDS)
+  if (!p)
+    {
+      return 0; // Abort before consuming the packet number
     }
 
   uint32_t sz = p->GetSize ();
-
-  // check whether the connection is appLimited, i.e. not enough data to fill a packet
-  if (sz < maxSize and m_txBuffer->AppSize () == 0 and m_tcb->m_bytesInFlight.Get () < m_tcb->m_cWnd)
+  
+  if (sz == 0 && !withAck && space == APPLICATION_DATA)
     {
-      NS_LOG_LOGIC ("Connection is Application-Limited. sz = " << sz << " < maxSize = " << maxSize);
+      NS_LOG_INFO ("Skipping empty packet (payload 0, no ACK)");
+      return 0; // Abort before consuming the packet number
+    }
+  // We confirmed we will send a packet, increment 
+  m_pnSpaces[space].m_nextTxSequence++;
+
+  // 6. CONGESTION CONTROL AND PACING MANAGEMENT
+  if (sz < payloadMaxSize && m_txBuffer->AppSize () == 0 && m_tcb->m_bytesInFlight.Get () < m_tcb->m_cWnd)
+    {
+      NS_LOG_LOGIC ("Connection is Application-Limited. sz = " << sz << " < maxSize = " << payloadMaxSize);
       m_tcb->m_appLimitedUntil = m_tcb->m_delivered + m_tcb->m_bytesInFlight.Get () ? : 1U;
     }
 
-  // perform pacing
   if (m_tcb->m_pacing)
     {
-      NS_LOG_DEBUG ("Pacing is enabled");
       if (m_pacingTimer.IsExpired ())
         {
-          NS_LOG_DEBUG ("Current Pacing Rate " << m_tcb->m_pacingRate);
-          NS_LOG_DEBUG ("Pacing Timer is in expired state, activate it. Expires in " <<
-                        m_tcb->m_pacingRate.Get ().CalculateBytesTxTime (sz));
-          m_pacingTimer.Schedule (m_tcb->m_pacingRate.Get ().CalculateBytesTxTime (sz));
-        }
-      else
-        {
-          NS_LOG_INFO ("Pacing Timer is already in running state");
+          Time pacingDelay = Seconds (0);
+          if (m_tcb->m_pacingRate.Get ().GetBitRate () > 0)
+            {
+              pacingDelay = m_tcb->m_pacingRate.Get ().CalculateBytesTxTime (sz);
+              m_pacingTimer.Schedule (pacingDelay);
+            }
         }
     }
 
-  bool isAckOnly = ((sz == 0) & (withAck));
+  bool isAckOnly = ((sz == 0) && (withAck));
 
-  if (withAck && !m_receivedPacketNumbers.empty ())
+  // 7. FINAL ENCAPSULATION (APPEND ACK AND PADDING)
+  if (ackFrame)
     {
-      p->AddAtEnd (OnSendingAckFrame ());
+      p = p->Copy ();
+      p->AddAtEnd (ackFrame);
     }
 
-
-  QuicHeader head;
-
-  if (m_socketState == CONNECTING_SVR)
+  if (space == INITIAL_DATA && (p->GetSize () + head.GetSerializedSize () < MIN_INITIAL_PACKET_SIZE))
     {
-      m_connected = true;
-      head = QuicHeader::CreateHandshake (m_connectionId, m_vers,
-                                          packetNumber);
-    }
-  else if (m_socketState == CONNECTING_CLT)
-    {
-      head = QuicHeader::CreateInitial (m_connectionId, m_vers, packetNumber);
-    }
-  else if (m_socketState == OPEN)
-    {
-      if (!m_connected and !m_quicl4->Is0RTTHandshakeAllowed ())
-        {
-          m_connected = true;
-          head = QuicHeader::CreateHandshake (m_connectionId, m_vers,
-                                              packetNumber);
-        }
-      else if (!m_connected and m_quicl4->Is0RTTHandshakeAllowed ())
-        {
-          head = QuicHeader::Create0RTT (m_connectionId, m_vers,
-                                         packetNumber);
-          m_connected = true;
-          m_keyPhase == QuicHeader::PHASE_ONE ? m_keyPhase =
-            QuicHeader::PHASE_ZERO :
-            m_keyPhase =
-              QuicHeader::PHASE_ONE;
-        }
-      else
-        {
-          head = QuicHeader::CreateShort (m_connectionId, packetNumber,
-                                          !m_omit_connection_id, m_keyPhase);
-        }
-    }
-  else
-    {
-      // 0 bytes sent - the socket is closed!
-      return 0;
+      uint32_t padding = MIN_INITIAL_PACKET_SIZE - (p->GetSize () + head.GetSerializedSize ());
+      p->AddAtEnd (Create<Packet> (padding));
     }
 
-  NS_LOG_INFO ("SendDataPacket of size " << p->GetSize ());
+  uint32_t finalSize = p->GetSize () + head.GetSerializedSize ();
+
+  // 8. TRANSMISSION AND TRACING
   m_quicl4->SendPacket (this, p, head);
   m_txTrace (p, head, this);
   NotifyDataSent (sz);
 
-  m_txBuffer->UpdatePacketSent (packetNumber, sz);
+  if (isAckOnly)
+    m_txBuffer->UpdateAckSent (packetNumber, finalSize, space);
+  else
+    m_txBuffer->UpdatePacketSent (packetNumber, finalSize, space);
+
+  BytesInFlight ();
+  m_nextTxSequenceTrace (0, packetNumber.GetValue ());
 
   if (!m_quicCongestionControlLegacy)
     {
-      DynamicCast<QuicCongestionOps> (m_congestionControl)->OnPacketSent (
-        m_tcb, packetNumber, isAckOnly);
+      Ptr<QuicCongestionOps> qcc = DynamicCast<QuicCongestionOps> (m_congestionControl);
+      if (qcc) qcc->OnPacketSent (m_tcb, packetNumber, isAckOnly);
     }
+    
   if (!isAckOnly)
     {
+      m_pnSpaces[space].m_ackElicitingOutstanding = true;
+      m_pnSpaces[space].m_timeOfLastSentAckElicitingPacket = Simulator::Now ();
       SetReTxTimeout ();
     }
+
+  NS_LOG_INFO("QUIC SendDataPacket --> Sent Pkt nº" << packetNumber.GetValue() 
+              << " on space " << space << "(Size: " << finalSize << " bytes)");
 
   return sz;
 }
@@ -1401,95 +1345,104 @@ QuicSocketBase::SendDataPacket (SequenceNumber32 packetNumber,
 void
 QuicSocketBase::SetReTxTimeout ()
 {
-  //TODO check for special packets
   NS_LOG_FUNCTION (this);
 
-  // Don't arm the alarm if there are no packets with retransmittable data in flight.
-  //if (numRetransmittablePacketsOutstanding == 0)
-  if (false)
+  Ptr<QuicSocketState> tcbd = m_tcb;
+  Time now = Simulator::Now ();
+
+  // 1. Loss Timer: Check for packets that have exceeded the reordering window
+  Time lossTime = Time::Max ();
+  bool anyLossTimerActive = false;
+
+  for (int i = 0; i < 3; i++)
+    {
+      if (m_pnSpaces[i].m_lossTime != Seconds (0))
+        {
+          lossTime = std::min (lossTime, m_pnSpaces[i].m_lossTime);
+          anyLossTimerActive = true;
+        }
+    }
+
+  if (anyLossTimerActive)
+    {
+      m_tcb->m_lossDetectionAlarm.Cancel ();
+      m_tcb->m_nextAlarmTrigger = lossTime;
+      m_tcb->m_alarmType = 0; // LOSS_TIMER
+
+      // Ensure we don't schedule in the past; if lossTime <= now, trigger in next timestep
+      Time delay = (lossTime > now) ? (lossTime - now) : TimeStep (1);
+      m_tcb->m_lossDetectionAlarm = Simulator::Schedule (delay, &QuicSocketBase::ReTxTimeout, this);
+      return;
+    }
+
+  // 2. PTO Timer: Calculate based on Smoothed RTT and RTT Variance
+  Time earliestPTO = Time::Max ();
+  bool anyOutstanding = false;
+
+  for (int i = 0; i < 3; i++)
+    {
+      // Only schedule PTO if there is data that can be lost in this space
+      if (!m_pnSpaces[i].m_ackElicitingOutstanding) continue;
+
+      // RFC 9002: PTO = SRTT + max(4*RTTVAR, Granularity) + MaxAckDelay
+      Time timeout = tcbd->m_smoothedRtt + std::max (4 * tcbd->m_rttVar, tcbd->m_kGranularity);
+      
+      // Handshake spaces do not include peer's max_ack_delay
+      if (i == APPLICATION_DATA)
+        {
+          timeout += tcbd->m_peerMaxAckDelay;
+        }
+      
+      // Exponential backoff for repeated timeouts
+      timeout = timeout * (1 << tcbd->m_ptoCount.Get());
+      
+      Time ptoTime = m_pnSpaces[i].m_timeOfLastSentAckElicitingPacket + timeout;
+      if (ptoTime < earliestPTO)
+        {
+          earliestPTO = ptoTime;
+          anyOutstanding = true;
+        }
+    }
+
+  if (!anyOutstanding)
     {
       m_tcb->m_lossDetectionAlarm.Cancel ();
       return;
     }
 
-  if (m_tcb->m_kUsingTimeLossDetection)
-    {
-      m_tcb->m_lossTime = Simulator::Now () + m_tcb->m_kTimeReorderingFraction * m_tcb->m_smoothedRtt;
-    }
+  m_tcb->m_lossDetectionAlarm.Cancel ();
+  m_tcb->m_nextAlarmTrigger = earliestPTO;
+  m_tcb->m_alarmType = 1; // PTO_TIMER
 
-  Time alarmDuration;
-  // Handshake packets are outstanding
-  if (m_socketState == CONNECTING_CLT || m_socketState == CONNECTING_SVR)
-    {
-      NS_LOG_INFO ("Connecting, set alarm");
-      // Handshake retransmission alarm.
-      if (m_tcb->m_smoothedRtt == Seconds (0))
-        {
-          alarmDuration = 2 * m_tcb->m_kDefaultInitialRtt;
-        }
-      else
-        {
-          alarmDuration = 2 * m_tcb->m_smoothedRtt;
-        }
-      alarmDuration = std::max (alarmDuration + m_tcb->m_maxAckDelay,
-                                m_tcb->m_kMinTLPTimeout);
-      alarmDuration = alarmDuration * (2 ^ m_tcb->m_handshakeCount);
-      m_tcb->m_alarmType = 0;
-    }
-  else if (m_tcb->m_lossTime != Seconds (0))
-    {
-      NS_LOG_INFO ("Early retransmit timer");
-      // Early retransmit timer or time loss detection.
-      alarmDuration = m_tcb->m_lossTime - m_tcb->m_timeOfLastSentPacket;
-      m_tcb->m_alarmType = 1;
-    }
-  else if (m_tcb->m_tlpCount < m_tcb->m_kMaxTLPs)
-    {
-      NS_LOG_LOGIC ("m_tcb->m_tlpCount < m_tcb->m_kMaxTLPs");
-      // Tail Loss Probe
-      alarmDuration = std::max (
-        (3 / 2) * m_tcb->m_smoothedRtt + m_tcb->m_maxAckDelay,
-        m_tcb->m_kMinTLPTimeout);
-      m_tcb->m_alarmType = 2;
-    }
-  else
-    {
-      NS_LOG_LOGIC ("RTO");
-      alarmDuration = m_tcb->m_smoothedRtt + 4 * m_tcb->m_rttVar
-        + m_tcb->m_maxAckDelay;
-      alarmDuration = std::max (alarmDuration, m_tcb->m_kMinRTOTimeout);
-      alarmDuration = alarmDuration * (2 ^ m_tcb->m_rtoCount);
-      m_tcb->m_alarmType = 3;
-    }
-  NS_LOG_INFO ("Schedule ReTxTimeout at time " << Simulator::Now ().GetSeconds () << " to expire at time " << (Simulator::Now () + alarmDuration).GetSeconds ());
-  NS_LOG_INFO ("Alarm after " << alarmDuration.GetSeconds () << " seconds");
-  m_tcb->m_lossDetectionAlarm = Simulator::Schedule (alarmDuration,
-                                                     &QuicSocketBase::ReTxTimeout, this);
-  m_tcb->m_nextAlarmTrigger = Simulator::Now () + alarmDuration;
+  // If the calculated ptoTime is already behind us, we trigger it nearly immediately 
+  // but let ReTxTimeout handle the state advancement.
+  Time ptoDelay = (earliestPTO > now) ? (earliestPTO - now) : TimeStep (1);
+
+  m_tcb->m_lossDetectionAlarm = Simulator::Schedule (ptoDelay, &QuicSocketBase::ReTxTimeout, this);
 }
 
 void
 QuicSocketBase::DoRetransmit (std::vector<Ptr<QuicSocketTxItem> > lostPackets)
 {
   NS_LOG_FUNCTION (this);
-  // Get packets to retransmit
-  SequenceNumber32 next = ++m_tcb->m_nextTxSequence;
-  uint32_t toRetx = m_txBuffer->Retransmission (next);
-  NS_LOG_INFO (toRetx << " bytes to retransmit");
-  NS_LOG_DEBUG ("Send the retransmitted frame");
-  uint32_t win = AvailableWindow ();
-  uint32_t connWin = ConnectionWindow ();
-  uint32_t bytesInFlight = BytesInFlight ();
-  NS_LOG_DEBUG (
-    "BEFORE Available Window " << win
-                               << " Connection RWnd " << connWin
-                               << " BytesInFlight " << bytesInFlight
-                               << " BufferedSize " << m_txBuffer->AppSize ()
-                               << " MaxPacketSize " << GetSegSize ());
-
-  // Send the retransmitted data
-  NS_LOG_INFO ("Retransmitted packet, next sequence number " << m_tcb->m_nextTxSequence);
-  SendDataPacket (next, toRetx, m_connected);
+  
+  if (lostPackets.empty()) { return; }
+  
+  // Group lost packets by space
+  std::map<PacketNumberSpace, bool> spacesWithLoss;
+  for (auto &item : lostPackets)
+    {
+      spacesWithLoss[item->m_space] = true;
+    }
+  
+  // Retransmit once per space
+  // The packet numbers will be assigned inside Retransmission()
+  for (auto &pair : spacesWithLoss)
+    {
+      PacketNumberSpace space = pair.first;
+      m_txBuffer->Retransmission (SequenceNumber32(0), space);
+    }
+  SendPendingData (m_connected);
 }
 
 void
@@ -1501,117 +1454,78 @@ QuicSocketBase::ReTxTimeout ()
       return;
     }
   NS_LOG_FUNCTION (this);
-  NS_LOG_INFO ("ReTxTimeout Expired at time " << Simulator::Now ().GetSeconds ());
-  // Handshake packets are outstanding)
-  if (m_tcb->m_alarmType == 0 && (m_socketState == CONNECTING_CLT || m_socketState == CONNECTING_SVR))
+  NS_LOG_INFO ("ReTxTimeout Expired at time " << Simulator::Now ().GetSeconds () << " alarm type " << (int)m_tcb->m_alarmType);
+
+  if (m_tcb->m_alarmType == 0) // LOSS_TIMER
     {
-      // Handshake retransmission alarm.
-      //TODO retransmit handshake packets
-      //RetransmitAllHandshakePackets();
-      m_tcb->m_handshakeCount++;
-    }
-  else if (m_tcb->m_alarmType == 1 && m_tcb->m_lossTime != Seconds (0))
-    {
-      std::vector<Ptr<QuicSocketTxItem> > lostPackets = m_txBuffer->DetectLostPackets ();
-      NS_LOG_INFO ("RTO triggered: early retransmit");
-      // Early retransmit or Time Loss Detection.
-      if (m_quicCongestionControlLegacy)
+      std::vector<Ptr<QuicSocketTxItem> > allLost;
+      for (int i = 0; i < 3; i++)
         {
-          // TCP early retransmit logic [RFC 5827]: enter recovery (RFC 6675, Sec. 5)
-          if (m_tcb->m_congState != TcpSocketState::CA_RECOVERY)
-            {
-              m_tcb->m_congState = TcpSocketState::CA_RECOVERY;
-              m_tcb->m_cWnd = m_tcb->m_ssThresh;
-              m_tcb->m_endOfRecovery = m_tcb->m_highTxMark;
-              m_congestionControl->CongestionStateSet (
-                m_tcb, TcpSocketState::CA_RECOVERY);
-              m_tcb->m_ssThresh = m_congestionControl->GetSsThresh (
-                m_tcb, BytesInFlight ());
-            }
+          std::vector<Ptr<QuicSocketTxItem> > lost = m_txBuffer->DetectLostPackets (m_tcb, static_cast<PacketNumberSpace>(i));
+          allLost.insert (allLost.end (), lost.begin (), lost.end ());
+          m_pnSpaces[i].m_lossTime = Seconds (0);
         }
-      else
+      NS_LOG_INFO ("Loss detection triggered. Newly lost packets: " << allLost.size ());
+      if (!allLost.empty ())
         {
-          Ptr<QuicCongestionOps> cc = dynamic_cast<QuicCongestionOps*> (&(*m_congestionControl));
-          cc->OnPacketsLost (m_tcb, lostPackets);
+          DoRetransmit (allLost);
         }
-      // Retransmit all lost packets immediately
-      DoRetransmit (lostPackets);
     }
-  else if (m_tcb->m_alarmType == 2 && m_tcb->m_tlpCount < m_tcb->m_kMaxTLPs)
+  else // PTO_TIMER
     {
-      // Tail Loss Probe. Send one new data packet, do not retransmit - IETF Draft QUIC Recovery, Sec. 4.3.2
-      SequenceNumber32 next = ++m_tcb->m_nextTxSequence;
-      NS_LOG_INFO ("TLP triggered");
-      uint32_t s = std::min (ConnectionWindow (), GetSegSize ());
-
-      // cancel pacing to send packet immediately
-      m_pacingTimer.Cancel ();
-
-      SendDataPacket (next, s, m_connected);
-      m_tcb->m_tlpCount++;
-    }
-  else if (m_tcb->m_alarmType == 3)
-    {
-      // RTO.
-      if (m_tcb->m_rtoCount == 0)
+      NS_LOG_INFO ("PTO triggered");
+      m_tcb->m_ptoCount = m_tcb->m_ptoCount.Get() + 1;
+      
+      // Determine which space to send in. 
+      PacketNumberSpace ptoSpace = APPLICATION_DATA;
+      if (m_txBuffer->GetHandshakeInFlight () > 0)
         {
-          m_tcb->m_largestSentBeforeRto = m_tcb->m_highTxMark;
+           if (m_txBuffer->BytesInFlight (INITIAL_DATA) > 0) ptoSpace = INITIAL_DATA;
+           else ptoSpace = HANDSHAKE_DATA;
         }
-      // RTO. Send two new data packets, do not retransmit - IETF Draft QUIC Recovery, Sec. 4.3.3
-      NS_LOG_INFO ("RTO triggered");
-      SequenceNumber32 next = ++m_tcb->m_nextTxSequence;
-      uint32_t s = std::min (AvailableWindow (), GetSegSize ());
 
-      // cancel pacing to send packet immediately
-      m_pacingTimer.Cancel ();
-
-      SendDataPacket (next, s, m_connected);
-      next = ++m_tcb->m_nextTxSequence;
-
-      s = std::min (AvailableWindow (), GetSegSize ());
-
-      // cancel pacing, again
-      m_pacingTimer.Cancel ();
-
-      SendDataPacket (next, s, m_connected);
-
-      m_tcb->m_rtoCount++;
+      // Send a PING frame to ensure ack-eliciting
+      Ptr<Packet> ping = Create<Packet> ();
+      QuicSubheader sub;
+      sub.SetPing ();
+      ping->AddHeader (sub);
+      m_txBuffer->Add (ping, ptoSpace);
+      
+      // Force transmission of at least one packet bypassing window checks in SendPendingData
+      SendDataPacket (ptoSpace, GetSegSize (), m_connected);
+      
+      // Also try to send one more if possible (up to 2 packets)
+      SendPendingData (m_connected);
     }
+  SetReTxTimeout ();
 }
 
 uint32_t
 QuicSocketBase::AvailableWindow () const
 {
-  NS_LOG_FUNCTION (this);
+  // 1. Congestion Window (Wire Bytes)
+  uint32_t cwnd = m_tcb->m_cWnd.Get ();
+  uint32_t wireBytesInFlight = m_txBuffer->GetCongestionControlledBytesInFlight ();
+  uint32_t congestionAvail = (wireBytesInFlight >= cwnd) ? 0 : cwnd - wireBytesInFlight;
 
-  NS_LOG_DEBUG ("m_max_data " << m_max_data << " m_tcb->m_cWnd.Get () " << m_tcb->m_cWnd.Get ());
-  uint32_t win = std::min (m_max_data, m_tcb->m_cWnd.Get ());   // Number of bytes allowed to be outstanding
-  uint32_t inflight = BytesInFlight ();   // Number of outstanding bytes
-
-  if (inflight > win)
+  // 2. Flow Control Window (Payload Bytes Only)
+  // m_delivered now tracks only STREAM payload bytes (after UpdateRateSample fix)
+  uint32_t unackedPayload = m_txBuffer->GetPayloadBytesInFlight ();
+  uint64_t totalPayloadSent = m_tcb->m_delivered + unackedPayload;
+  
+  uint32_t flowControlAvail = 0;
+  if (m_max_data > totalPayloadSent)
     {
-      NS_LOG_INFO (
-        "InFlight=" << inflight << ", Win=" << win << " availWin=0");
-      return 0;
+      flowControlAvail = m_max_data - totalPayloadSent;
     }
 
-  NS_LOG_INFO (
-    "InFlight=" << inflight << ", Win=" << win << " availWin=" << win - inflight);
-  return win - inflight;
+  NS_LOG_DEBUG ("Congestion avail: " << congestionAvail 
+               << " bytes, Flow control avail: " << flowControlAvail << " bytes"
+               << " (delivered: " << m_tcb->m_delivered 
+               << ", unacked payload: " << unackedPayload << ")");
 
-}
-
-uint32_t
-QuicSocketBase::ConnectionWindow () const
-{
-  NS_LOG_FUNCTION (this);
-
-  uint32_t inFlight = BytesInFlight ();
-
-  NS_LOG_INFO (
-    "Returning calculated Connection: MaxData " << m_max_data << " InFlight: " << inFlight);
-
-  return (inFlight > m_max_data) ? 0 : m_max_data - inFlight;
+  // 3. Return the more restrictive limit
+  return std::min (congestionAvail, flowControlAvail);
 }
 
 uint32_t
@@ -1649,6 +1563,10 @@ QuicSocketBase::Recv (uint32_t maxSize, uint32_t flags)
       return Create<Packet> ();
     }
   Ptr<Packet> outPacket = m_rxBuffer->Extract (maxSize);
+  if (outPacket)
+    {
+      m_bytesRead += outPacket->GetSize ();
+    }
   return outPacket;
 }
 
@@ -1661,13 +1579,14 @@ QuicSocketBase::RecvFrom (uint32_t maxSize, uint32_t flags,
 
   Ptr<Packet> packet = m_rxBuffer->Extract (maxSize);
 
-  if (packet != nullptr && packet->GetSize () != 0)
+  if (packet && packet->GetSize () != 0)
     {
-      if (m_endPoint != nullptr)
+      m_bytesRead += packet->GetSize ();
+      if (m_endPoint)
         {
           fromAddress = InetSocketAddress (m_endPoint->GetPeerAddress (), m_endPoint->GetPeerPort ());
         }
-      else if (m_endPoint6 != nullptr)
+      else if (m_endPoint6)
         {
           fromAddress = Inet6SocketAddress (m_endPoint6->GetPeerAddress (), m_endPoint6->GetPeerPort ());
         }
@@ -1745,16 +1664,21 @@ QuicSocketBase::SendConnectionClosePacket (uint16_t errorCode, std::string phras
   NS_LOG_FUNCTION (this);
 
   Ptr<Packet> p = Create<Packet> ();
-  SequenceNumber32 packetNumber = ++m_tcb->m_nextTxSequence;
 
   QuicSubheader qsb = QuicSubheader::CreateConnectionClose (errorCode, phrase.c_str ());
   p->AddHeader (qsb);
 
+  PacketNumberSpace space = APPLICATION_DATA;
+  if (!m_handshakeConfirmed && m_txBuffer->GetHandshakeInFlight () > 0) space = HANDSHAKE_DATA;
+  else if (!m_connected) space = INITIAL_DATA; 
+
+  SequenceNumber32 packetNumber = m_pnSpaces[space].m_nextTxSequence++;
 
   QuicHeader head;
-
-  head = QuicHeader::CreateShort (m_connectionId, packetNumber,
-                                  !m_omit_connection_id, m_keyPhase);
+  if (space == INITIAL_DATA) head = QuicHeader::CreateInitial (m_connectionId, m_vers, packetNumber);
+  else if (space == HANDSHAKE_DATA) head = QuicHeader::CreateHandshake (m_connectionId, m_vers, packetNumber);
+  else head = QuicHeader::CreateShort (m_connectionId, packetNumber,
+                                  true, m_keyPhase);
 
 
   NS_LOG_DEBUG ("Send Connection Close packet with header " << head);
@@ -1857,7 +1781,7 @@ QuicSocketBase::SetupCallback (void)
 {
   NS_LOG_FUNCTION (this);
 
-  if (m_quicl4 == 0)
+  if (!m_quicl4)
     {
       return -1;
     }
@@ -1885,7 +1809,7 @@ QuicSocketBase::AppendingRx (Ptr<Packet> frame, Address &address)
   else
     {
       NS_LOG_INFO ("Notify Data Recv");
-      NotifyDataRecv ();   // trigger the application method
+      NotifyDataRecv ();
     }
 
   return frame->GetSize ();
@@ -1968,44 +1892,37 @@ void
 QuicSocketBase::SendInitialHandshake (uint8_t type,
                                       const QuicHeader &quicHeader,
                                       Ptr<Packet> packet)
-{
+ {
   NS_LOG_FUNCTION (this << m_vers);
 
   if (type == QuicHeader::VERSION_NEGOTIATION)
     {
       NS_LOG_INFO ("Create VERSION_NEGOTIATION");
       m_receivedTransportParameters = false;
-      m_couldContainTransportParameters = true;
 
-      std::vector<uint32_t> supportedVersions;
-      supportedVersions.push_back (QUIC_VERSION);
-      supportedVersions.push_back (QUIC_VERSION_DRAFT_10);
-      supportedVersions.push_back (QUIC_VERSION_NS3_IMPL);
+      // Use a C-style array to ensure compile-time size evaluation for the buffer,
+      // which can be more robust for compiler static analysis.
+      const uint32_t supportedVersions[] = {QUIC_VERSION, QUIC_VERSION_NS3_IMPL};
+      const size_t numVersions = sizeof(supportedVersions) / sizeof(supportedVersions[0]);
+      uint8_t *buffer = new uint8_t[4 * numVersions];
 
-      uint8_t *buffer = new uint8_t[4 * supportedVersions.size ()];
-
-      Ptr<Packet> payload = Create<Packet> (buffer,
-                                            4 * supportedVersions.size ());
-
-      for (uint8_t i = 0; i < (uint8_t) supportedVersions.size (); i++)
+      for (size_t i = 0; i < numVersions; i++)
         {
-
           buffer[4 * i] = (supportedVersions[i]);
           buffer[4 * i + 1] = (supportedVersions[i] >> 8);
           buffer[4 * i + 2] = (supportedVersions[i] >> 16);
           buffer[4 * i + 3] = (supportedVersions[i] >> 24);
-          //NS_LOG_INFO(" " << (uint64_t) buffer[4*i] << " " << (uint64_t)buffer[4*i+1] << " " << (uint64_t)buffer[4*i+2] << " " << (uint64_t)buffer[4*i+3] );
-
         }
 
-      Ptr<Packet> p = Create<Packet> (buffer, 4 * supportedVersions.size ());
+      std::vector<uint32_t> supportedVersionsVec(supportedVersions, supportedVersions + numVersions);
+      Ptr<Packet> p = Create<Packet> (buffer, 4 * numVersions);
       QuicHeader head = QuicHeader::CreateVersionNegotiation (
         quicHeader.GetConnectionId (),
         QUIC_VERSION_NEGOTIATION,
-        supportedVersions);
+        supportedVersionsVec);
 
       // Set initial congestion window and Ssthresh
-      m_tcb->m_cWnd = m_tcb->m_initialCWnd;
+      m_tcb->m_cWnd = m_tcb->GetInitialWindow();
       m_tcb->m_ssThresh = m_tcb->m_initialSsThresh;
 
       m_quicl4->SendPacket (this, p, head);
@@ -2016,32 +1933,47 @@ QuicSocketBase::SendInitialHandshake (uint8_t type,
   else if (type == QuicHeader::INITIAL)
     {
       // Set initial congestion window and Ssthresh
-      m_tcb->m_cWnd = m_tcb->m_initialCWnd;
+      m_tcb->m_cWnd = m_tcb->GetInitialWindow();
       m_tcb->m_ssThresh = m_tcb->m_initialSsThresh;
 
       NS_LOG_INFO ("Create INITIAL");
       Ptr<Packet> p = Create<Packet> ();
-      p->AddHeader (OnSendingTransportParameters ());
-      // the RFC says that
-      // "Clients MUST ensure that the first Initial packet they
-      // send is sent in a UDP datagram that is at least 1200 octets."
-      Ptr<Packet> payload = Create<Packet> (
-        GetInitialPacketSize () - p->GetSize ());
-      p->AddAtEnd (payload);
+      
+      QuicTransportParameters tp = OnSendingTransportParameters ();
+      Ptr<Packet> tpPkt = Create<Packet> ();
+      tpPkt->AddHeader (tp);
+      
+      QuicSubheader crypto = QuicSubheader::CreateCrypto (0, tpPkt->GetSize ());
+      p->AddHeader (crypto);
+      p->AddAtEnd (tpPkt);
 
-      m_quicl5->DispatchSend (p, 0);
+      // RFC 9000 Section 14.1: Initial packets must be padded to at least 1200 bytes.
+      // We assume 0 header size to be safe and ensure the total packet size is always >= 1200.
+      uint32_t currentSize = p->GetSize ();
+      if (currentSize < GetInitialPacketSize ())
+        {
+          Ptr<Packet> padding = Create<Packet> (GetInitialPacketSize () - currentSize);
+          p->AddAtEnd (padding);
+        }
 
+      // RFC 9000: CRYPTO frames go directly to socket TX buffer, not through a stream
+      AppendingTx (p, INITIAL_DATA);
+ 
     }
   else if (type == QuicHeader::RETRY)
     {
       NS_LOG_INFO ("Create RETRY");
       Ptr<Packet> p = Create<Packet> ();
-      p->AddHeader (OnSendingTransportParameters ());
-      Ptr<Packet> payload = Create<Packet> (
-        GetInitialPacketSize () - p->GetSize ());
-      p->AddAtEnd (payload);
+      QuicTransportParameters tp = OnSendingTransportParameters ();
+      Ptr<Packet> tpPkt = Create<Packet> ();
+      tpPkt->AddHeader (tp);
+      
+      QuicSubheader crypto = QuicSubheader::CreateCrypto (0, tpPkt->GetSize ());
+      p->AddHeader (crypto);
+      p->AddAtEnd (tpPkt);
 
-      m_quicl5->DispatchSend (p, 0);
+      // RFC 9000: CRYPTO frames go directly to socket TX buffer, not through a stream
+      AppendingTx (p, INITIAL_DATA);
     }
   else if (type == QuicHeader::HANDSHAKE)
     {
@@ -2049,147 +1981,176 @@ QuicSocketBase::SendInitialHandshake (uint8_t type,
       Ptr<Packet> p = Create<Packet> ();
       if (m_socketState == CONNECTING_SVR)
         {
-          p->AddHeader (OnSendingTransportParameters ());
+          QuicTransportParameters tp = OnSendingTransportParameters ();
+          Ptr<Packet> tpPkt = Create<Packet> ();
+          tpPkt->AddHeader (tp);
+          
+          QuicSubheader crypto = QuicSubheader::CreateCrypto (0, tpPkt->GetSize ());
+          p->AddHeader (crypto);
+          p->AddAtEnd (tpPkt);
         }
 
-      Ptr<Packet> payload = Create<Packet> (
-        GetInitialPacketSize () - p->GetSize ());
-      p->AddAtEnd (payload);
-
-      m_quicl5->DispatchSend (p, 0);
+      // RFC 9000: CRYPTO frames go directly to socket TX buffer, not through a stream
+      if (p->GetSize () > 0)
+        {
+          AppendingTx (p, HANDSHAKE_DATA);
+        }
       m_congestionControl->CongestionStateSet (m_tcb,
-                                               TcpSocketState::CA_OPEN);
-    }
-  else if (type == QuicHeader::ZRTT_PROTECTED)
-    {
-      NS_LOG_INFO ("Create ZRTT_PROTECTED");
-      Ptr<Packet> p = Create<Packet> ();
-      p->AddHeader (OnSendingTransportParameters ());
-
-      m_quicl5->DispatchSend (p, 0);
-
+                                              TcpSocketState::CA_OPEN);
     }
   else
     {
-
       NS_LOG_INFO ("Wrong Handshake Type");
-
       return;
-
     }
 }
 
 void
-QuicSocketBase::OnReceivedFrame (QuicSubheader &sub)
+QuicSocketBase::OnReceivedFrame (Ptr<Packet> p, QuicSubheader &sub, PacketNumberSpace space)
 {
-  NS_LOG_FUNCTION (this << (uint64_t)sub.GetFrameType ());
+  NS_LOG_FUNCTION (this << space);
 
-  uint8_t frameType = sub.GetFrameType ();
-
-  switch (frameType)
+  if (sub.IsStream ())
     {
-
-      case QuicSubheader::ACK:
-        NS_LOG_INFO ("Received ACK frame");
-        OnReceivedAckFrame (sub);
-        break;
-
-      case QuicSubheader::CONNECTION_CLOSE:
-        NS_LOG_INFO ("Received CONNECTION_CLOSE frame");
-        Close ();
-        break;
-
-      case QuicSubheader::APPLICATION_CLOSE:
-        NS_LOG_INFO ("Received APPLICATION_CLOSE frame");
-        DoClose ();
-        break;
-
-      case QuicSubheader::PADDING:
-        NS_LOG_INFO ("Received PADDING frame");
-        // no need to do anything
-        break;
-
-      case QuicSubheader::MAX_DATA:
-        // set the maximum amount of data that can be sent
-        // on this connection
-        NS_LOG_INFO ("Received MAX_DATA frame");
-        SetConnectionMaxData (sub.GetMaxData ());
-        break;
-
-      case QuicSubheader::MAX_STREAM_ID:
-        // TODO update the maximum stream ID
-        NS_LOG_INFO ("Received MAX_STREAM_ID frame");
-        break;
-
-      case QuicSubheader::PING:
-        // TODO
-        NS_LOG_INFO ("Received PING frame");
-        break;
-
-      case QuicSubheader::BLOCKED:
-        // TODO
-        NS_LOG_INFO ("Received BLOCKED frame");
-        break;
-
-      case QuicSubheader::STREAM_ID_BLOCKED:
-        // TODO
-        NS_LOG_INFO ("Received STREAM_ID_BLOCKED frame");
-        break;
-
-      case QuicSubheader::NEW_CONNECTION_ID:
-        // TODO
-        NS_LOG_INFO ("Received NEW_CONNECTION_ID frame");
-        break;
-
-      case QuicSubheader::PATH_CHALLENGE:
-        // TODO reply with a PATH_RESPONSE with the same value
-        // as that carried by the PATH_CHALLENGE
-        NS_LOG_INFO ("Received PATH_CHALLENGE frame");
-        break;
-
-      case QuicSubheader::PATH_RESPONSE:
-        // TODO check if it matches what was sent in a PATH_CHALLENGE
-        // otherwise abort with a UNSOLICITED_PATH_RESPONSE error
-        NS_LOG_INFO ("Received PATH_RESPONSE frame");
-        break;
-
-      default:
-        AbortConnection (
-          QuicSubheader::TransportErrorCodes_t::PROTOCOL_VIOLATION,
-          "Received Corrupted Frame");
-        return;
+      NS_ABORT_MSG ("Stream frame should be handled by QuicStream");
+    }
+  else if (sub.IsAck ())
+    {
+      OnReceivedAckFrame (sub, space);
+    }
+  else if (sub.GetFrameType () == QuicSubheader::CRYPTO)
+    {
+      NS_LOG_INFO ("Received CRYPTO frame");
+      // RFC 9000: Implement a buffer limit for CRYPTO frames (minimum 4096 bytes)
+      if (p->GetSize () > 4096)
+        {
+          AbortConnection (
+            QuicSubheader::TransportErrorCodes_t::CRYPTO_BUFFER_EXCEEDED,
+            "Crypto buffer limit exceeded");
+          return;
+        }
+    }
+  else if (sub.GetFrameType () == QuicSubheader::CONNECTION_CLOSE)
+    {
+      NS_LOG_INFO ("Received CONNECTION_CLOSE frame");
+      Close ();
+    }
+  else if (sub.GetFrameType () == QuicSubheader::APPLICATION_CLOSE)
+    {
+      NS_LOG_INFO ("Received APPLICATION_CLOSE frame");
+      DoClose ();
+    }
+  else if (sub.GetFrameType () == QuicSubheader::PADDING)
+    {
+      NS_LOG_INFO ("Received PADDING frame");
+      // no need to do anything
+    }
+  else if (sub.GetFrameType () == QuicSubheader::MAX_DATA)
+    {
+      // set the maximum amount of data that can be sent
+      // on this connection
+      NS_LOG_INFO ("Received MAX_DATA frame");
+      SetConnectionMaxData (sub.GetMaxData ());
+    }
+  else if (sub.GetFrameType () == QuicSubheader::MAX_STREAMS_BIDI)
+    {
+      NS_LOG_INFO ("Received MAX_STREAMS_BIDI frame");
+      SetMaxStreamIdBidirectional (sub.GetMaxStreamId ());
+    }
+  else if (sub.GetFrameType () == QuicSubheader::MAX_STREAMS_UNI)
+    {
+      NS_LOG_INFO ("Received MAX_STREAMS_UNI frame");
+      SetMaxStreamIdUnidirectional (sub.GetMaxStreamId ());
+    }
+  else if (sub.GetFrameType () == QuicSubheader::PING)
+    {
+      NS_LOG_INFO ("Received PING frame");
+      // PING triggers an ACK, which is already handled by MaybeQueueAck called after processing frames
+    }
+  else if (sub.GetFrameType () == QuicSubheader::DATA_BLOCKED)
+    {
+      NS_LOG_INFO ("Received DATA_BLOCKED frame at offset " << sub.GetOffset ());
+      // RFC 9000 Section 19.12: Informational only, could trigger an increase in MAX_DATA
+    }
+  else if (sub.GetFrameType () == QuicSubheader::STREAMS_BLOCKED_BIDI || sub.GetFrameType () == QuicSubheader::STREAMS_BLOCKED_UNI)
+    {
+      NS_LOG_INFO ("Received STREAMS_BLOCKED frame for limit " << sub.GetMaxStreamId ());
+      // RFC 9000 Section 19.14: Informational only
+    }
+  else if (sub.GetFrameType () == QuicSubheader::NEW_CONNECTION_ID)
+    {
+      NS_LOG_INFO ("Received NEW_CONNECTION_ID frame: Seq " << sub.GetSequence () << " CID " << sub.GetConnectionId ());
+      // TODO: Store alternative connection IDs for path migration
+    }
+  else if (sub.GetFrameType () == QuicSubheader::RETIRE_CONNECTION_ID)
+    {
+      NS_LOG_INFO ("Received RETIRE_CONNECTION_ID frame: Seq " << sub.GetSequence ());
+      // TODO: Retire the referenced local connection ID once a CID pool is tracked
+    }
+  else if (sub.GetFrameType () == QuicSubheader::NEW_TOKEN)
+    {
+      NS_LOG_INFO ("Received NEW_TOKEN frame: Token Length " << sub.GetToken ().size ());
+      // RFC 9000 Section 19.7: Informational only; no 0-RTT token cache is maintained
+    }
+  else if (sub.GetFrameType () == QuicSubheader::PATH_CHALLENGE)
+    {
+      NS_LOG_INFO ("Received PATH_CHALLENGE frame with data " << sub.GetData ());
+      SendPathResponse (sub.GetData ());
+    }
+  else if (sub.GetFrameType () == QuicSubheader::PATH_RESPONSE)
+    {
+      NS_LOG_INFO ("Received PATH_RESPONSE frame with data " << sub.GetData ());
+      // TODO: Validate against pending PATH_CHALLENGE
+    }
+  else
+    {
+      switch (sub.GetFrameType ())
+        {
+        case QuicSubheader::HANDSHAKE_DONE:
+          NS_LOG_INFO ("Received HANDSHAKE_DONE frame");
+          if (m_quicl4->IsServer () or space != APPLICATION_DATA)
+            {
+              AbortConnection (
+                QuicSubheader::TransportErrorCodes_t::PROTOCOL_VIOLATION,
+                "HANDSHAKE_DONE received by server or in non-App space");
+              return;
+            }
+          m_handshakeConfirmed = true;
+          m_txBuffer->DiscardSpace (HANDSHAKE_DATA);
+          m_pnSpaces[HANDSHAKE_DATA].m_ackElicitingOutstanding = false;
+          break;
+        default:
+          AbortConnection (
+            QuicSubheader::TransportErrorCodes_t::PROTOCOL_VIOLATION,
+            "Received Corrupted Frame");
+          return;
+        }
     }
 
 }
 
 Ptr<Packet>
-QuicSocketBase::OnSendingAckFrame ()
+QuicSocketBase::OnSendingAckFrame (PacketNumberSpace space)
 {
-  NS_LOG_FUNCTION (this);
+  NS_LOG_FUNCTION (this << space);
 
-  NS_ABORT_MSG_IF (m_receivedPacketNumbers.empty (),
-                   " Sending Ack Frame without packets to acknowledge");
+  std::vector<SequenceNumber32> &receivedPn = m_pnSpaces[space].m_receivedPacketNumbers;
+  NS_ABORT_MSG_IF (receivedPn.empty (), "No packet numbers received - cannot build ACK");
 
-//m_delAckEvent.Cancel();
-//m_delAckCount = 0;
+  std::sort(receivedPn.begin(), receivedPn.end(), std::greater<SequenceNumber32>());
 
-  NS_LOG_INFO ("Attach an ACK frame to the packet");
-
-  std::sort (m_receivedPacketNumbers.begin (), m_receivedPacketNumbers.end (),
-             std::greater<SequenceNumber32> ());
-
-  SequenceNumber32 largestAcknowledged = *(m_receivedPacketNumbers.begin ());
+  SequenceNumber32 largestReceived = m_pnSpaces[space].m_largestReceived;
 
   uint32_t ackBlockCount = 0;
   std::vector<uint32_t> additionalAckBlocks;
   std::vector<uint32_t> gaps;
 
   std::vector<SequenceNumber32>::const_iterator curr_rec_it =
-    m_receivedPacketNumbers.begin ();
+    receivedPn.begin ();
   std::vector<SequenceNumber32>::const_iterator next_rec_it =
-    m_receivedPacketNumbers.begin () + 1;
+    receivedPn.begin () + 1;
 
-  for (; next_rec_it != m_receivedPacketNumbers.end ();
+  for (; next_rec_it != receivedPn.end ();
        ++curr_rec_it, ++next_rec_it)
     {
 
@@ -2209,43 +2170,51 @@ QuicSocketBase::OnSendingAckFrame ()
     }
 
 
-  Time delay = Simulator::Now () - m_lastReceived;
+  Time delay = Simulator::Now () - m_pnSpaces[space].m_lastReceived;
   uint64_t ack_delay = delay.GetMicroSeconds ();
   QuicSubheader sub = QuicSubheader::CreateAck (
-    largestAcknowledged.GetValue (), ack_delay, largestAcknowledged.GetValue (),
+    largestReceived.GetValue (), ack_delay, largestReceived.GetValue (),
     gaps, additionalAckBlocks);
 
   Ptr<Packet> ackFrame = Create<Packet> ();
   ackFrame->AddHeader (sub);
 
-  if (m_lastMaxData < m_maxDataInterval)
+  if (space == APPLICATION_DATA && m_handshakeConfirmed)
     {
-      m_lastMaxData++;
-    }
-  else
-    {
-      QuicSubheader maxData = QuicSubheader::CreateMaxData (m_quicl5->GetMaxData ());
-      ackFrame->AddHeader (maxData);
-      m_lastMaxData = 0;
+      if (m_lastMaxData < m_maxDataInterval)
+        {
+          m_lastMaxData++;
+        }
+      else
+        {
+          // New Max Data = Total Bytes Read by App + RX Buffer Capacity
+          uint64_t newMaxData = m_bytesRead + GetSocketRcvBufSize ();
+
+          QuicSubheader maxData = QuicSubheader::CreateMaxData (newMaxData);
+          ackFrame->AddHeader (maxData);
+          m_lastMaxData = 0;
+          
+          NS_LOG_INFO ("Sending MAX_DATA update: " << newMaxData);
+        }
     }
 
   return ackFrame;
 }
 
 void
-QuicSocketBase::OnReceivedAckFrame (QuicSubheader &sub)
+QuicSocketBase::OnReceivedAckFrame (QuicSubheader &sub, PacketNumberSpace space)
 {
-  NS_LOG_FUNCTION (this);
+  NS_LOG_FUNCTION (this << space);
   NS_LOG_INFO ("Process ACK");
 
   // Generate RateSample
   struct RateSample * rs = m_txBuffer->GetRateSample ();
+  uint32_t previousWindow = BytesInFlight ();
   rs->m_priorInFlight = m_tcb->m_bytesInFlight.Get ();
+  m_tcb->m_priorInFlight = rs->m_priorInFlight;
 
   uint32_t lostOut = m_txBuffer->GetLost ();
   uint32_t delivered = m_tcb->m_delivered;
-
-  uint32_t previousWindow = m_txBuffer->BytesInFlight ();
 
   std::vector<uint32_t> additionalAckBlocks = sub.GetAdditionalAckBlocks ();
   std::vector<uint32_t> gaps = sub.GetGaps ();
@@ -2259,55 +2228,44 @@ QuicSocketBase::OnReceivedAckFrame (QuicSubheader &sub)
     "Received Corrupted Ack Frame.");
 
   std::vector<Ptr<QuicSocketTxItem> > ackedPackets = m_txBuffer->OnAckUpdate (
-    m_tcb, largestAcknowledged, additionalAckBlocks, gaps);
+    m_tcb, largestAcknowledged, additionalAckBlocks, gaps, space);
+
+  if (space == HANDSHAKE_DATA && m_quicl4->IsServer () && !m_handshakeDoneSent)
+    {
+      if (!ackedPackets.empty ())
+        {
+          NS_LOG_INFO ("Handshake confirmed, sending HANDSHAKE_DONE");
+          m_handshakeDoneSent = true;
+          m_handshakeConfirmed = true;
+          m_txBuffer->DiscardSpace (HANDSHAKE_DATA);
+          m_pnSpaces[HANDSHAKE_DATA].m_ackElicitingOutstanding = false;
+
+          Ptr<Packet> hsd = Create<Packet> ();
+          QuicSubheader sub;
+          sub.SetHandshakeDone ();
+          hsd->AddHeader (sub);
+          AppendingTx (hsd, APPLICATION_DATA);
+        }
+    }
 
   // Count newly acked bytes
   uint32_t ackedBytes = previousWindow - m_txBuffer->BytesInFlight ();
+
+  // Reset PTO count on successful ACK (RFC 9002 Section 6.2.1)
+  if (!ackedPackets.empty ())
+    {
+      m_tcb->m_ptoCount = 0;
+    }
 
   m_txBuffer->GenerateRateSample ();
   rs->m_packetLoss = std::abs ((int) lostOut - (int) m_txBuffer->GetLost ());
   m_tcb->m_lastAckedSackedBytes = m_tcb->m_delivered - delivered;
 
-  // RTO packet acknowledged - IETF Draft QUIC Recovery, Sec. 4.3.3
-  if (m_tcb->m_rtoCount > 0)
-    {
-      // Packets after the RTO have been acknowledged
-      if (m_tcb->m_largestSentBeforeRto.GetValue () < largestAcknowledged)
-        {
-
-          uint32_t newPackets = (largestAcknowledged
-                                 - m_tcb->m_largestSentBeforeRto.GetValue ()) / GetSegSize ();
-          uint32_t inFlightBeforeRto = m_txBuffer->BytesInFlight ();
-          m_txBuffer->ResetSentList (newPackets);
-          std::vector<Ptr<QuicSocketTxItem> > lostPackets =
-            m_txBuffer->DetectLostPackets ();
-          if (m_quicCongestionControlLegacy && !lostPackets.empty ())
-            {
-              // Reset congestion window and go into loss mode
-              m_tcb->m_cWnd = m_tcb->m_kMinimumWindow;
-              m_tcb->m_endOfRecovery = m_tcb->m_highTxMark;
-              m_tcb->m_ssThresh = m_congestionControl->GetSsThresh (
-                m_tcb, inFlightBeforeRto);
-              m_tcb->m_congState = TcpSocketState::CA_LOSS;
-              m_congestionControl->CongestionStateSet (
-                m_tcb, TcpSocketState::CA_LOSS);
-            }
-        }
-      else
-        {
-          m_tcb->m_rtoCount = 0;
-        }
-    }
-
-  // Tail loss probe packet acknowledged - IETF Draft QUIC Recovery, Sec. 4.3.2
-  if (m_tcb->m_tlpCount > 0 && !ackedPackets.empty ())
-    {
-      m_tcb->m_tlpCount = 0;
-    }
+  // PTO reset already handled above
 
   // Find lost packets
   std::vector<Ptr<QuicSocketTxItem> > lostPackets =
-    m_txBuffer->DetectLostPackets ();
+    m_txBuffer->DetectLostPackets (m_tcb, space);
   // Recover from losses
   if (!lostPackets.empty ())
     {
@@ -2328,8 +2286,11 @@ QuicSocketBase::OnReceivedAckFrame (QuicSubheader &sub)
         }
       else
         {
-          DynamicCast<QuicCongestionOps> (m_congestionControl)->OnPacketsLost (
-            m_tcb, lostPackets);
+          Ptr<QuicCongestionOps> qcc = DynamicCast<QuicCongestionOps> (m_congestionControl);
+          if (qcc)
+            {
+              qcc->OnPacketsLost (m_tcb, lostPackets);
+            }
         }
       DoRetransmit (lostPackets);
     }
@@ -2339,9 +2300,13 @@ QuicSocketBase::OnReceivedAckFrame (QuicSubheader &sub)
         {
           NS_LOG_INFO ("Update the variables in the congestion control (QUIC)");
           // Process the ACK
-          DynamicCast<QuicCongestionOps> (m_congestionControl)->OnAckReceived (
-            m_tcb, sub, ackedPackets, rs);
-          m_lastRtt = m_tcb->m_lastRtt;
+          Ptr<QuicCongestionOps> qcc = DynamicCast<QuicCongestionOps> (m_congestionControl);
+          if (qcc)
+            {
+              qcc->OnAckReceived (m_tcb, sub, ackedPackets, rs);
+              m_lastRtt = m_tcb->m_lastRtt;
+              NS_LOG_DEBUG ("Updated m_lastRtt to " << m_lastRtt.Get().GetSeconds());
+            }
         }
       else
         {
@@ -2349,6 +2314,10 @@ QuicSocketBase::OnReceivedAckFrame (QuicSubheader &sub)
 
           NS_LOG_INFO ("Update the variables in the congestion control (legacy), ackedBytes "
                        << ackedBytes << " ackedSegments " << ackedSegments);
+          if (ackedPackets.empty ())
+            {
+              return;
+            }
           // new acks are ordered from the highest packet number to the smalles
           Ptr<QuicSocketTxItem> lastAcked = ackedPackets.at (0);
 
@@ -2359,6 +2328,7 @@ QuicSocketBase::OnReceivedAckFrame (QuicSubheader &sub)
               Time ackDelay = MicroSeconds (sub.GetAckDelay ());
               m_tcb->m_lastRtt = Now () - lastAcked->m_lastSent - ackDelay;
               m_lastRtt = m_tcb->m_lastRtt;
+              NS_LOG_DEBUG ("Updated m_lastRtt (legacy) to " << m_lastRtt.Get().GetSeconds());
             }
           if (m_tcb->m_congState != TcpSocketState::CA_RECOVERY
               && m_tcb->m_congState != TcpSocketState::CA_LOSS)
@@ -2387,20 +2357,24 @@ QuicSocketBase::OnReceivedAckFrame (QuicSubheader &sub)
     }
   else
     {
-      NS_LOG_INFO ("Received an ACK to ack an ACK");
+      NS_LOG_DEBUG ("Duplicate or old ACK received");
     }
 
   // notify the application that more data can be sent
   if (GetTxAvailable () > 0)
     {
-      NotifySend (GetTxAvailable ());
+  NotifySend (GetTxAvailable ());
     }
 
   // try to send more data
   SendPendingData (m_connected);
-
-  // Compute timers
-  SetReTxTimeout ();
+  // FIX: If we have no bytes in flight for this space, turn off the PTO flag
+  if (m_txBuffer->BytesInFlight (space) == 0)
+    {
+      m_pnSpaces[space].m_ackElicitingOutstanding = false;
+      // Cancel existing alarm to prevent unnecessary callbacks
+      m_tcb->m_lossDetectionAlarm.Cancel ();
+    }
 }
 
 QuicTransportParameters
@@ -2412,8 +2386,9 @@ QuicSocketBase::OnSendingTransportParameters ()
   transportParameters = transportParameters.CreateTransportParameters (
     m_initial_max_stream_data, m_max_data, m_initial_max_stream_id_bidi,
     (uint16_t) m_idleTimeout.Get ().GetSeconds (),
-    (uint8_t) m_omit_connection_id, m_tcb->m_segmentSize,
-    m_ack_delay_exponent, m_initial_max_stream_id_uni);
+    m_tcb->m_segmentSize,
+    m_ack_delay_exponent, (uint16_t) m_max_ack_delay.GetMilliSeconds (),
+    m_initial_max_stream_id_uni);
 
   return transportParameters;
 }
@@ -2433,33 +2408,16 @@ QuicSocketBase::OnReceivedTransportParameters (
     }
   m_receivedTransportParameters = true;
 
-// TODO: A client MUST NOT include a stateless reset token. A server MUST treat receipt of a stateless_reset_token_transport
-//   parameter as a connection error of type TRANSPORT_PARAMETER_ERROR
-
-  uint32_t mask = transportParameters.GetInitialMaxStreamIdBidi ()
-    & 0x00000003;
-  if ((mask == 0) && m_socketState != CONNECTING_CLT)
+  if (transportParameters.HasStatelessResetToken () && m_socketState == CONNECTING_CLT)
     {
-      // TODO AbortConnection(QuicSubheader::TransportErrorCodes_t::TRANSPORT_PARAMETER_ERROR, "Invalid Initial Max Stream Id Bidi value provided from Server");
-      return;
-    }
-  else if ((mask == 1) && m_socketState != CONNECTING_SVR)
-    {
-      // TODO AbortConnection(QuicSubheader::TransportErrorCodes_t::TRANSPORT_PARAMETER_ERROR, "Invalid Initial Max Stream Id Bidi value provided from Client");
+      AbortConnection (
+        QuicSubheader::TransportErrorCodes_t::TRANSPORT_PARAMETER_ERROR,
+        "Client MUST NOT include a stateless reset token");
       return;
     }
 
-  mask = transportParameters.GetInitialMaxStreamIdUni () & 0x00000003;
-  if ((mask == 2) && m_socketState != CONNECTING_CLT)
-    {
-      // TODO AbortConnection(QuicSubheader::TransportErrorCodes_t::TRANSPORT_PARAMETER_ERROR, "Invalid Initial Max Stream Id Uni value provided from Server");
-      return;
-    }
-  else if ((mask == 3) && m_socketState != CONNECTING_SVR)
-    {
-      // TODO AbortConnection(QuicSubheader::TransportErrorCodes_t::TRANSPORT_PARAMETER_ERROR, "Invalid Initial Max Stream Id Uni value provided from Client");
-      return;
-    }
+  // RFC 9000: initial_max_streams_bidi and initial_max_streams_uni are counts,
+  // not Stream IDs. Therefore, we do not check for Stream ID alignment (0x03 mask).
 
   if (transportParameters.GetMaxPacketSize ()
       < QuicSocketBase::MIN_INITIAL_PACKET_SIZE
@@ -2471,17 +2429,8 @@ QuicSocketBase::OnReceivedTransportParameters (
       return;
     }
 
-// version 15 has removed the upper bound on the idle timeout
-// if (transportParameters.GetIdleTimeout () > 600)
-//   {
-//     AbortConnection (
-//         QuicSubheader::TransportErrorCodes_t::TRANSPORT_PARAMETER_ERROR,
-//         "Invalid Idle Timeout value provided");
-//     return;
-//   }
-
   NS_LOG_DEBUG (
-    "Before applying received transport parameters " << " m_initial_max_stream_data " << m_initial_max_stream_data << " m_max_data " << m_max_data << " m_initial_max_stream_id_bidi " << m_initial_max_stream_id_bidi << " m_idleTimeout " << m_idleTimeout << " m_omit_connection_id " << m_omit_connection_id << " m_tcb->m_segmentSize " << m_tcb->m_segmentSize << " m_ack_delay_exponent " << m_ack_delay_exponent << " m_initial_max_stream_id_uni " << m_initial_max_stream_id_uni);
+    "Before applying received transport parameters " << " m_initial_max_stream_data " << m_initial_max_stream_data << " m_max_data " << m_max_data << " m_initial_max_stream_id_bidi " << m_initial_max_stream_id_bidi << " m_idleTimeout " << m_idleTimeout << " m_tcb->m_segmentSize " << m_tcb->m_segmentSize << " m_ack_delay_exponent " << m_ack_delay_exponent << " m_initial_max_stream_id_uni " << m_initial_max_stream_id_uni);
 
   m_initial_max_stream_data = std::min (
     transportParameters.GetInitialMaxStreamData (),
@@ -2499,8 +2448,7 @@ QuicSocketBase::OnReceivedTransportParameters (
     std::min (transportParameters.GetIdleTimeout (),
               (uint16_t) m_idleTimeout.Get ().GetSeconds ()) * 1e9);
 
-  m_omit_connection_id = std::min (transportParameters.GetOmitConnection (),
-                                   (uint8_t) m_omit_connection_id);
+  m_tcb->m_peerMaxAckDelay = MilliSeconds (transportParameters.GetMaxAckDelay ());
 
   SetSegSize (
     std::min ((uint32_t) transportParameters.GetMaxPacketSize (),
@@ -2515,7 +2463,7 @@ QuicSocketBase::OnReceivedTransportParameters (
     m_initial_max_stream_id_uni);
 
   NS_LOG_DEBUG (
-    "After applying received transport parameters " << " m_initial_max_stream_data " << m_initial_max_stream_data << " m_max_data " << m_max_data << " m_initial_max_stream_id_bidi " << m_initial_max_stream_id_bidi << " m_idleTimeout " << m_idleTimeout << " m_omit_connection_id " << m_omit_connection_id << " m_tcb->m_segmentSize " << m_tcb->m_segmentSize << " m_ack_delay_exponent " << m_ack_delay_exponent << " m_initial_max_stream_id_uni " << m_initial_max_stream_id_uni);
+    "After applying received transport parameters " << " m_initial_max_stream_data " << m_initial_max_stream_data << " m_max_data " << m_max_data << " m_initial_max_stream_id_bidi " << m_initial_max_stream_id_bidi << " m_idleTimeout " << m_idleTimeout << " m_tcb->m_segmentSize " << m_tcb->m_segmentSize << " m_ack_delay_exponent " << m_ack_delay_exponent << " m_initial_max_stream_id_uni " << m_initial_max_stream_id_uni);
 }
 
 int
@@ -2546,24 +2494,18 @@ int
 QuicSocketBase::DoFastConnect (void)
 {
   NS_LOG_FUNCTION (this);
-  NS_ABORT_MSG_IF (!IsVersionSupported (m_vers),
-                   "0RTT Handshake requested with wrong Initial Version");
+  NS_ABORT_MSG_IF (!IsVersionSupported (m_vers), "0RTT Handshake requested with wrong Initial Version");
 
-  if (m_socketState != IDLE)
-    {
-      //m_errno = ERROR_INVAL;
-      return -1;
-    }
+  if (m_socketState != IDLE) return -1;
 
-  else if (m_socketState == IDLE)
-    {
-      SetState (OPEN);
-      Simulator::ScheduleNow (&QuicSocketBase::ConnectionSucceeded, this);
-      m_congestionControl->CongestionStateSet (m_tcb,
-                                               TcpSocketState::CA_OPEN);
-      QuicHeader q;
-      SendInitialHandshake (QuicHeader::ZRTT_PROTECTED, q, 0);
-    }
+  // RFC 9000: Client must send INITIAL before 0-RTT
+  SetState (CONNECTING_CLT);
+  QuicHeader q;
+  SendInitialHandshake (QuicHeader::INITIAL, q, 0);
+
+  // Signal the application to start sending data (0-RTT headers will be used)
+  Simulator::ScheduleNow (&QuicSocketBase::ConnectionSucceeded, this);
+  m_congestionControl->CongestionStateSet (m_tcb, TcpSocketState::CA_OPEN);
   return 0;
 }
 
@@ -2602,127 +2544,181 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
 {
   NS_LOG_FUNCTION (this);
 
+  // Trace the incoming packet
   m_rxTrace (p, quicHeader, this);
 
   NS_LOG_INFO ("Received packet of size " << p->GetSize ());
 
-  // check if this packet is not received during the draining period
+  // Check if this packet is received during the draining period
   if (!m_drainingPeriodEvent.IsRunning ())
     {
-      m_idleTimeoutEvent.Cancel ();   // reset the IDLE timeout
-      NS_LOG_LOGIC (
-        this << " ReceivedData Schedule Close at time " << Simulator::Now ().GetSeconds () << " to expire at time " << (Simulator::Now () + m_idleTimeout.Get ()).GetSeconds ());
-      m_idleTimeoutEvent = Simulator::Schedule (m_idleTimeout,
-                                                &QuicSocketBase::Close, this);
+      m_idleTimeoutEvent.Cancel ();   // Reset the IDLE timeout
+      m_idleTimeoutEvent = Simulator::Schedule (m_idleTimeout, &QuicSocketBase::Close, this);
     }
-  else   // If the socket is in Draining Period, discard the packets
+  else   // If the socket is in Draining Period, discard all incoming packets
     {
+      NS_LOG_WARN ("QUIC Socket in draining period, discarding packet");
       return;
     }
 
-  int onlyAckFrames = 0;
+  int isAckEliciting = 0;
   bool unsupportedVersion = false;
+  PacketNumberSpace space = APPLICATION_DATA;
+  bool isOutOfOrder = false;
 
-  if (quicHeader.IsORTT () and m_socketState == LISTENING)
+  // 1. Handle 0-RTT packets (Early Data)
+  // RFC 9000: Servers must be able to process 0-RTT packets during or even before the handshake
+  if (quicHeader.IsORTT ())
     {
-
-      if (m_serverBusy)
+      if (m_socketState == LISTENING || m_socketState == CONNECTING_SVR || m_socketState == OPEN)
         {
-          AbortConnection (QuicSubheader::TransportErrorCodes_t::SERVER_BUSY,
-                           "Server too busy to accept new connections");
-          return;
-        }
+          /* * TODO: Implement 0-RTT buffering for out-of-order packets and ACK waiting.
+           *
+           * RFC 9001 Requirement: 0-RTT data is encrypted with keys derived from 
+           * the Session Ticket. However, the server cannot identify the correct 
+           * keys until it processes the ClientHello contained in the INITIAL packet.
+           *
+           * Current simplified logic: We process 0-RTT immediately, since this
+           * implementation does not do actual encryption. We also send the 
+           * necessary ACKs immediately, which is premature. If 0-RTT arrives 
+           * BEFORE the INITIAL packet (common in reordered networks), a real 
+           * implementation would be unable to decrypt it and would need to buffer 
+           * the opaque packet until the INITIAL arrives to unlock the keys.
+           */
+          if (m_socketState == LISTENING || m_socketState == CONNECTING_SVR)
+            {
+              NS_LOG_INFO ("Server receives 0-RTT packet during handshake. Processing early data.");
 
-      m_couldContainTransportParameters = true;
+              // Verify if the 0-RTT handshake is allowed by policy
+              if (!m_quicl4->Is0RTTHandshakeAllowed ())
+                {
+                  NS_LOG_WARN ("Server rejects 0-RTT packet: Feature is disabled");
+                  AbortConnection (QuicSubheader::TransportErrorCodes_t::PROTOCOL_VIOLATION,
+                                   "0-RTT Handshake not allowed by Server");
+                  return;
+                }
+              // We process the data but it is the INITIAL packet who will formalize the connection.
+            }
+          else // m_socketState == OPEN
+            {
+              // Handle 0-RTT packets that arrive late
+              NS_LOG_INFO ("Received late 0-RTT packet while already in OPEN state");
+            }
 
-      onlyAckFrames = m_quicl5->DispatchRecv (p, address);
-      m_receivedPacketNumbers.push_back (quicHeader.GetPacketNumber ());
+          space = APPLICATION_DATA;
+          SequenceNumber32 currentPn = quicHeader.GetPacketNumber();
+          isOutOfOrder = IsOutOfOrder(space, currentPn);
+          
+          if (m_socketState == IDLE || m_socketState == CLOSING) return;
 
-      m_connected = true;
-      m_keyPhase == QuicHeader::PHASE_ONE ? m_keyPhase =
-        QuicHeader::PHASE_ZERO :
-        m_keyPhase =
-          QuicHeader::PHASE_ONE;
-      SetState (OPEN);
-      Simulator::ScheduleNow (&QuicSocketBase::ConnectionSucceeded, this);
-      m_congestionControl->CongestionStateSet (m_tcb,
-                                               TcpSocketState::CA_OPEN);
-      m_couldContainTransportParameters = false;
-
-    }
-  else if (quicHeader.IsInitial () and m_socketState == CONNECTING_SVR)
-    {
-      NS_LOG_INFO ("Server receives INITIAL");
-      if (m_serverBusy)
-        {
-          AbortConnection (QuicSubheader::TransportErrorCodes_t::SERVER_BUSY,
-                           "Server too busy to accept new connections");
-          return;
-        }
-
-      if (p->GetSize () < QuicSocketBase::MIN_INITIAL_PACKET_SIZE)
-        {
-          std::stringstream error;
-          error << "Initial Packet smaller than "
-                << QuicSocketBase::MIN_INITIAL_PACKET_SIZE << " octects";
-          AbortConnection (
-            QuicSubheader::TransportErrorCodes_t::PROTOCOL_VIOLATION,
-            error.str ().c_str ());
-          return;
-        }
-
-      onlyAckFrames = m_quicl5->DispatchRecv (p, address);
-      m_receivedPacketNumbers.push_back (quicHeader.GetPacketNumber ());
-
-      if (IsVersionSupported (quicHeader.GetVersion ()))
-        {
-          m_couldContainTransportParameters = false;
-          SendInitialHandshake (QuicHeader::HANDSHAKE, quicHeader, p);
+          // Track packet number for acknowledgement
+          m_pnSpaces[space].m_receivedPacketNumbers.push_back (currentPn);
+          m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue(), currentPn.GetValue());
+          m_pnSpaces[space].m_lastReceived = Simulator::Now ();
+          isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
         }
       else
         {
-          NS_LOG_INFO (this << " WRONG VERSION " << quicHeader.GetVersion ());
-          unsupportedVersion = true;
-          SendInitialHandshake (QuicHeader::VERSION_NEGOTIATION, quicHeader,
-                                p);
+          NS_LOG_DEBUG ("Dropping 0-RTT packet received in invalid state: " << QuicStateName[m_socketState]);
+          return;
         }
-      return;
     }
-  else if (quicHeader.IsHandshake () and m_socketState == CONNECTING_CLT)   // Undefined compiler behaviour if i try to receive transport parameters
+
+  // 2. Handle INITIAL packets
+  else if (quicHeader.IsInitial () && (m_socketState == CONNECTING_SVR || m_socketState == LISTENING))
     {
-      NS_LOG_INFO ("Client receives HANDSHAKE");
+      NS_LOG_INFO ("Server receives INITIAL packet");
+      
+      // If we were LISTENING move to CONNECTING_SVR
+      if (m_socketState == LISTENING)
+        {
+          SetState (CONNECTING_SVR);
+        }
 
-      onlyAckFrames = m_quicl5->DispatchRecv (p, address);
-      m_receivedPacketNumbers.push_back (quicHeader.GetPacketNumber ());
+      // Check minimum initial packet size (RFC 9000 anti-amplification)
+      if (p->GetSize () < QuicSocketBase::MIN_INITIAL_PACKET_SIZE)
+        {
+          NS_LOG_WARN ("Initial packet too small (" << p->GetSize() << " bytes)");
+          AbortConnection (QuicSubheader::TransportErrorCodes_t::PROTOCOL_VIOLATION, "Initial too small");
+          return;
+        }
 
-      SetState (OPEN);
-      Simulator::ScheduleNow (&QuicSocketBase::ConnectionSucceeded, this);
-      m_congestionControl->CongestionStateSet (m_tcb,
-                                               TcpSocketState::CA_OPEN);
-      m_couldContainTransportParameters = false;
+      space = INITIAL_DATA;
+      SequenceNumber32 currentPn = quicHeader.GetPacketNumber();
+      isOutOfOrder = IsOutOfOrder(space, currentPn);
 
+      // Track packet number for acknowledgement
+      m_pnSpaces[space].m_receivedPacketNumbers.push_back (currentPn);
+      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue(), currentPn.GetValue());
+      m_pnSpaces[space].m_lastReceived = Simulator::Now ();
+      isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
+
+      if (m_socketState == IDLE || m_socketState == CLOSING) return;
+
+      // Server responds with Handshake/Initial packets
       SendInitialHandshake (QuicHeader::HANDSHAKE, quicHeader, p);
-      return;
     }
-  else if (quicHeader.IsHandshake () and m_socketState == CONNECTING_SVR)
+
+  // 3. Handle HANDSHAKE packets (Handshake completion and key derivation)
+  else if (quicHeader.IsHandshake () && (m_socketState == CONNECTING_CLT || m_socketState == CONNECTING_SVR))
     {
-      NS_LOG_INFO ("Server receives HANDSHAKE");
+      NS_LOG_INFO ("Receiving HANDSHAKE packet");
+      space = HANDSHAKE_DATA;
+      SequenceNumber32 currentPn = quicHeader.GetPacketNumber();
+      isOutOfOrder = IsOutOfOrder(space, currentPn);
 
-      onlyAckFrames = m_quicl5->DispatchRecv (p, address);
-      m_receivedPacketNumbers.push_back (quicHeader.GetPacketNumber ());
+      // Track packet number for acknowledgement
+      m_pnSpaces[space].m_receivedPacketNumbers.push_back (currentPn);
+      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue(), currentPn.GetValue());
+      m_pnSpaces[space].m_lastReceived = Simulator::Now ();
+      isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
 
+      if (m_socketState == IDLE || m_socketState == CLOSING) return;
+
+      // RFC 9000: Handshake is confirmed. Move to OPEN state and enable SHORT headers for subsequent data.
       SetState (OPEN);
+      m_connected = true; 
+      NS_LOG_INFO (this << " m_connected set to true");
       Simulator::ScheduleNow (&QuicSocketBase::ConnectionSucceeded, this);
-      m_congestionControl->CongestionStateSet (m_tcb,
-                                               TcpSocketState::CA_OPEN);
-      SendPendingData (true);
-      return;
-    }
-  else if (quicHeader.IsVersionNegotiation ()
-           and m_socketState == CONNECTING_CLT)
-    {
-      NS_LOG_INFO ("Client receives VERSION_NEGOTIATION");
+      m_congestionControl->CongestionStateSet (m_tcb, TcpSocketState::CA_OPEN);
+      
+      // Cleanup handshake resources
+      m_txBuffer->DiscardSpace (INITIAL_DATA);
+      m_pnSpaces[INITIAL_DATA].m_ackElicitingOutstanding = false;
 
+      if (m_socketState == CONNECTING_CLT) 
+        {
+          // Clients might need to send a final Handshake packet or ACK
+          SendInitialHandshake (QuicHeader::HANDSHAKE, quicHeader, p);
+        }
+      else 
+        {
+          // Servers can now flush any data that was pending Handshake confirmation
+          SendPendingData (true);
+        }
+    }
+
+  // 4. Handle SHORT packets (Standard 1-RTT application data)
+  else if (quicHeader.IsShort () && m_socketState == OPEN)
+    {
+      NS_LOG_INFO ("Received SHORT packet while in OPEN state");
+      space = APPLICATION_DATA;
+      SequenceNumber32 currentPn = quicHeader.GetPacketNumber();
+      isOutOfOrder = IsOutOfOrder(space, currentPn);
+
+      // Track packet number for acknowledgement
+      m_pnSpaces[space].m_receivedPacketNumbers.push_back (currentPn);
+      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue(), currentPn.GetValue());
+      m_pnSpaces[space].m_lastReceived = Simulator::Now ();
+      isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
+    }
+
+  // 5. Handle Version Negotiation (Client Side)
+  else if (quicHeader.IsVersionNegotiation () && m_socketState == CONNECTING_CLT)
+    {
+      NS_LOG_INFO ("Client receives VERSION_NEGOTIATION packet");
+
+      // Extract the list of versions supported by the server from the packet payload
       uint8_t *buffer = new uint8_t[p->GetSize ()];
       p->CopyData (buffer, p->GetSize ());
 
@@ -2732,74 +2728,77 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
           receivedVersions.push_back (
             buffer[i] + (buffer[i + 1] << 8) + (buffer[i + 2] << 16)
             + (buffer[i + 3] << 24));
-          //NS_LOG_INFO(" " << (uint64_t) buffer[i] << " " << (uint64_t)buffer[i+1] << " " << (uint64_t)buffer[i+2] << " " << (uint64_t)buffer[i+3] );
         }
+      delete[] buffer; // Clean up the temporary buffer
 
+      // Define versions supported by this client implementation
       std::vector<uint32_t> supportedVersions;
       supportedVersions.push_back (QUIC_VERSION);
-      supportedVersions.push_back (QUIC_VERSION_DRAFT_10);
       supportedVersions.push_back (QUIC_VERSION_NS3_IMPL);
 
+      // Try to find a version that both client and server support
       uint32_t foundVersion = 0;
-      for (uint8_t i = 0; i < receivedVersions.size (); i++)
+      for (uint32_t sVersion : supportedVersions)
         {
-          for (uint8_t j = 0; j < supportedVersions.size (); j++)
+          for (uint32_t rVersion : receivedVersions)
             {
-//			NS_LOG_INFO("rec " << receivedVersions[i] << " myvers " << m_supportedVersions[j] );
-              if (receivedVersions[i] == supportedVersions[j])
+              if (rVersion == sVersion)
                 {
-                  foundVersion = receivedVersions[i];
+                  foundVersion = rVersion;
+                  break;
                 }
             }
+          if (foundVersion != 0) break;
         }
 
       if (foundVersion != 0)
         {
-          NS_LOG_INFO ("A matching supported version is found " << foundVersion << " re-send initial");
-          m_vers = foundVersion;
-          SendInitialHandshake (QuicHeader::INITIAL, quicHeader, p);
+          NS_LOG_INFO ("A matching supported version is found: " << foundVersion << ". Re-sending INITIAL.");
+          m_vers = foundVersion; // Update to the negotiated version
+          
+          // Reset transport parameters status as we are restarting the handshake
+          m_receivedTransportParameters = false; 
+          
+          // Re-send the Initial Handshake with the new version
+          QuicHeader q;
+          SendInitialHandshake (QuicHeader::INITIAL, q, 0);
         }
       else
         {
+          // RFC 9000: If no common version is found, the connection must be aborted
+          NS_LOG_ERROR ("No supported version found among server's offered versions.");
           AbortConnection (
             QuicSubheader::TransportErrorCodes_t::VERSION_NEGOTIATION_ERROR,
             "No supported Version found by the Client");
           return;
         }
-      return;
+      return; 
     }
-  else if (quicHeader.IsShort () and m_socketState == OPEN)
-    {
-      // TODOACK here?
-      // we need to check if the packet contains only an ACK frame
-      // in this case we cannot explicitely ACK it!
-      // check if delayed ACK is used
-      m_receivedPacketNumbers.push_back (quicHeader.GetPacketNumber ());
-      onlyAckFrames = m_quicl5->DispatchRecv (p, address);
 
-    }
+  // 6. Final State Checks (Closing and Errors)
   else if (m_socketState == CLOSING)
     {
-
-      AbortConnection (m_transportErrorCode,
-                       "Received packet in Closing state");
-
+      NS_LOG_INFO ("Packet received during CLOSING state, aborting connection");
+      AbortConnection (m_transportErrorCode, "Received packet in Closing state");
     }
   else
     {
-
+      NS_LOG_DEBUG ("Dropping unexpected packet type " << (uint32_t)quicHeader.GetTypeByte() 
+                    << " in current state " << QuicStateName[m_socketState]);
       return;
     }
 
-  // trigger the process for ACK handling if the received packet was not ACK only
-  NS_LOG_DEBUG ("onlyAckFrames " << onlyAckFrames << " unsupportedVersion " << unsupportedVersion);
-  if (onlyAckFrames == 1 && !unsupportedVersion)
+  // 7. Trigger Acknowledgment for all ack-eliciting packets
+  // Note: Initial and Handshake packets are acked inside their specific blocks.
+  if (isAckEliciting == 1 && !unsupportedVersion)
     {
-      m_lastReceived = Simulator::Now ();
-      NS_LOG_DEBUG ("Call MaybeQueueAck");
-      MaybeQueueAck ();
+      NS_LOG_DEBUG ("Packet is ack-eliciting, scheduling ACK in space " << space);
+      MaybeQueueAck (space, isOutOfOrder);
     }
-
+  else if (isAckEliciting == 0)
+    {
+      NS_LOG_INFO ("Received non-ack-eliciting packet (ACK-only), no further action needed");
+    }
 }
 
 uint32_t
@@ -2817,7 +2816,22 @@ QuicSocketBase::GetConnectionMaxData () const
 void
 QuicSocketBase::SetConnectionMaxData (uint32_t maxData)
 {
-  m_max_data = maxData;
+  // Only allow increases, never decreases (RFC 9000 compliance)
+  if (maxData > m_max_data)
+    {
+      m_max_data = maxData;
+      // Flush buffered data now that the window has opened.
+      SendPendingData (m_connected);
+
+      if (GetTxAvailable () > 0)
+        {
+          NotifySend (GetTxAvailable ());
+        }
+    }
+  else
+    {
+      NS_LOG_INFO ("Ignoring MAX_DATA " << maxData << " (not greater than current " << m_max_data << ")");
+    }
 }
 
 QuicSocket::QuicStates_t
@@ -2834,12 +2848,12 @@ QuicSocketBase::SetState (TracedValue<QuicStates_t> newstate)
   if (m_quicl4->IsServer ())
     {
       NS_LOG_INFO (
-        "Server " << QuicStateName[m_socketState] << " -> " << QuicStateName[newstate] << "");
+        "Server " << QuicStateName[m_socketState] << " -> " << QuicStateName[newstate] << " (connected=" << m_connected << ", confirmed=" << m_handshakeConfirmed << ")");
     }
   else
     {
       NS_LOG_INFO (
-        "Client " << QuicStateName[m_socketState] << " -> " << QuicStateName[newstate] << "");
+        "Client " << QuicStateName[m_socketState] << " -> " << QuicStateName[newstate] << " (connected=" << m_connected << ", confirmed=" << m_handshakeConfirmed << ")");
     }
 
   m_socketState = newstate;
@@ -2848,8 +2862,7 @@ QuicSocketBase::SetState (TracedValue<QuicStates_t> newstate)
 bool
 QuicSocketBase::IsVersionSupported (uint32_t version)
 {
-  if (version == QUIC_VERSION || version == QUIC_VERSION_DRAFT_10
-      || version == QUIC_VERSION_NS3_IMPL)
+  if (version == QUIC_VERSION || version == QUIC_VERSION_NS3_IMPL)
     {
       return true;
     }
@@ -2886,30 +2899,37 @@ QuicSocketBase::AbortConnection (uint16_t transportErrorCode,
   frame->AddHeader (quicSubheader);
 
   QuicHeader quicHeader;
+  PacketNumberSpace space = APPLICATION_DATA;
   switch (m_socketState)
     {
       case CONNECTING_CLT:
+        space = INITIAL_DATA;
         quicHeader = QuicHeader::CreateInitial (m_connectionId, m_vers,
-                                                m_tcb->m_nextTxSequence++);
+                                                m_pnSpaces[space].m_nextTxSequence++);
         break;
       case CONNECTING_SVR:
+        space = HANDSHAKE_DATA;
         quicHeader = QuicHeader::CreateHandshake (m_connectionId, m_vers,
-                                                  m_tcb->m_nextTxSequence++);
+                                                  m_pnSpaces[space].m_nextTxSequence++);
         break;
       case OPEN:
+        if (!m_connected) space = HANDSHAKE_DATA;
+        else space = APPLICATION_DATA;
+        
         quicHeader =
           !m_connected ?
           QuicHeader::CreateHandshake (m_connectionId, m_vers,
-                                       m_tcb->m_nextTxSequence++) :
+                                       m_pnSpaces[space].m_nextTxSequence++) :
           QuicHeader::CreateShort (m_connectionId,
-                                   m_tcb->m_nextTxSequence++,
-                                   !m_omit_connection_id, m_keyPhase);
+                                   m_pnSpaces[space].m_nextTxSequence++,
+                                   true, m_keyPhase);
         break;
       case CLOSING:
+        space = APPLICATION_DATA;
         quicHeader = QuicHeader::CreateShort (m_connectionId,
-                                              m_tcb->m_nextTxSequence++,
-                                              !m_omit_connection_id,
-                                              m_keyPhase);
+                                               m_pnSpaces[space].m_nextTxSequence++,
+                                               true,
+                                               m_keyPhase);
         break;
       default:
         NS_ABORT_MSG (
@@ -2960,6 +2980,53 @@ QuicSocketBase::CheckIfPacketOverflowMaxDataLimit (
   return false;
 }
 
+void
+QuicSocketBase::SetMaxStreamIdBidirectional (uint32_t maxStreamId)
+{
+  NS_LOG_FUNCTION (this << maxStreamId);
+  m_initial_max_stream_id_bidi = maxStreamId;
+}
+
+void
+QuicSocketBase::SetMaxStreamIdUnidirectional (uint32_t maxStreamId)
+{
+  NS_LOG_FUNCTION (this << maxStreamId);
+  m_initial_max_stream_id_uni = maxStreamId;
+}
+
+void
+QuicSocketBase::SendPathResponse (uint64_t data)
+{
+  NS_LOG_FUNCTION (this << data);
+
+  QuicSubheader sub = QuicSubheader::CreatePathResponse (data);
+  Ptr<Packet> p = Create<Packet> ();
+  p->AddHeader (sub);
+
+  PacketNumberSpace space = APPLICATION_DATA;
+  if (m_socketState == CONNECTING_SVR) space = HANDSHAKE_DATA;
+  else if (m_socketState == CONNECTING_CLT) space = INITIAL_DATA;
+  
+  SequenceNumber32 next = m_pnSpaces[space].m_nextTxSequence++;
+  QuicHeader head;
+  if (space == HANDSHAKE_DATA)
+    {
+      head = QuicHeader::CreateHandshake (m_connectionId, m_vers, next);
+    }
+  else if (space == INITIAL_DATA)
+    {
+      head = QuicHeader::CreateInitial (m_connectionId, m_vers, next);
+    }
+  else if (m_socketState == OPEN)
+    {
+      head = QuicHeader::CreateShort (m_connectionId, next, true, m_keyPhase);
+    }
+
+  m_quicl4->SendPacket (this, p, head);
+  m_txTrace (p, head, this);
+  NotifyDataSent (p->GetSize ());
+}
+
 uint32_t
 QuicSocketBase::GetMaxStreamId () const
 {
@@ -2978,28 +3045,27 @@ QuicSocketBase::GetMaxStreamIdUnidirectional () const
   return m_initial_max_stream_id_uni;
 }
 
-bool
-QuicSocketBase::CouldContainTransportParameters () const
-{
-  return m_couldContainTransportParameters;
-}
-
 void
 QuicSocketBase::SetCongestionControlAlgorithm (Ptr<TcpCongestionOps> algo)
 {
   NS_LOG_FUNCTION (this << algo);
-  if (DynamicCast<QuicCongestionOps> (algo) != 0)
+  m_congestionControl = algo;
+  if (!m_congestionControl)
     {
-      NS_LOG_INFO ("Non-legacy congestion control");
+      m_congestionControl = CreateObject<QuicCongestionOps> ();
+    }
+
+  if (DynamicCast<QuicCongestionOps> (m_congestionControl))
+    {
+      NS_LOG_INFO ("Non-legacy congestion control algorithm installed. Forcing LegacyCongestionControl to false.");
       m_quicCongestionControlLegacy = false;
     }
   else
     {
       NS_LOG_INFO (
-        "Legacy congestion control, using only TCP standard functions");
+        "Legacy congestion control, using only TCP standard functions. Forcing LegacyCongestionControl to true.");
       m_quicCongestionControlLegacy = true;
     }
-  m_congestionControl = algo;
 }
 
 void
@@ -3033,12 +3099,21 @@ QuicSocketBase::GetSocketRcvBufSize (void) const
 void
 QuicSocketBase::UpdateCwnd (uint32_t oldValue, uint32_t newValue)
 {
+  NS_LOG_FUNCTION (this << oldValue << newValue);
   m_cWndTrace (oldValue, newValue);
+  if (m_socketState == IDLE || m_socketState == LISTENING)
+    {
+      return;
+    }
+  // Trigger a check for data to send, otherwise QUIC won't
+  // realise it has CWND available until an ACK arrives.
+  Simulator::ScheduleNow(&QuicSocketBase::SendPendingData, this, m_connected);
 }
 
 void
 QuicSocketBase::UpdateSsThresh (uint32_t oldValue, uint32_t newValue)
 {
+  NS_LOG_FUNCTION (this << oldValue << newValue);
   m_ssThTrace (oldValue, newValue);
 }
 
@@ -3046,6 +3121,7 @@ void
 QuicSocketBase::UpdateCongState (TcpSocketState::TcpCongState_t oldValue,
                                  TcpSocketState::TcpCongState_t newValue)
 {
+  NS_LOG_FUNCTION (this << oldValue << newValue);
   m_congStateTrace (oldValue, newValue);
 }
 
@@ -3054,13 +3130,28 @@ QuicSocketBase::UpdateNextTxSequence (SequenceNumber32 oldValue,
                                       SequenceNumber32 newValue)
 
 {
+  NS_LOG_FUNCTION (this << oldValue << newValue);
   m_nextTxSequenceTrace (oldValue.GetValue (), newValue.GetValue ());
 }
 
 void
 QuicSocketBase::UpdateHighTxMark (SequenceNumber32 oldValue, SequenceNumber32 newValue)
 {
+  NS_LOG_FUNCTION (this << oldValue << newValue);
   m_highTxMarkTrace (oldValue.GetValue (), newValue.GetValue ());
+}
+
+void
+QuicSocketBase::UpdateBytesInFlight (uint32_t oldValue, uint32_t newValue)
+{
+  NS_LOG_FUNCTION (this << oldValue << newValue);
+  m_bytesInFlightTrace (oldValue, newValue);
+}
+
+void
+QuicSocketBase::UpdatePtoCount (uint32_t oldValue, uint32_t newValue)
+{
+  m_ptoCountTrace (oldValue, newValue);
 }
 
 void
@@ -3070,6 +3161,10 @@ QuicSocketBase::SetInitialSSThresh (uint32_t threshold)
                         "QuicSocketBase::SetSSThresh() cannot change initial ssThresh after connection started.");
 
   m_tcb->m_initialSsThresh = threshold;
+  if (m_socketState == IDLE)
+    {
+      m_tcb->m_ssThresh = threshold;
+    }
 }
 
 uint32_t
@@ -3089,6 +3184,18 @@ uint32_t
 QuicSocketBase::GetInitialPacketSize () const
 {
   return m_initialPacketSize;
+}
+
+void
+QuicSocketBase::SetMaxAckDelay (Time maxAckDelay)
+{
+  m_max_ack_delay = maxAckDelay;
+}
+
+Time
+QuicSocketBase::GetMaxAckDelay (void) const
+{
+  return m_max_ack_delay;
 }
 
 void QuicSocketBase::SetLatency (uint32_t streamId, Time latency)
@@ -3117,6 +3224,10 @@ QuicSocketBase::NotifyPacingPerformed (void)
   NS_LOG_FUNCTION (this);
   NS_LOG_INFO ("Pacing timer expired, try sending a packet");
   SendPendingData (m_connected);
+  if (GetTxAvailable () > 0)
+    {
+      NotifySend (GetTxAvailable ());
+    }
 }
 
 } // namespace ns3

@@ -25,11 +25,11 @@
 
 #pragma once
 
-#include "ns3/quic-congestion-ops.h"
+#include "quic-congestion-ops.h"
 #include "ns3/traced-value.h"
 #include "ns3/data-rate.h"
 #include "ns3/random-variable-stream.h"
-#include "ns3/windowed-filter.h"
+#include "windowed-filter.h"
 
 class QuicBbrCheckGainValuesTest;
 
@@ -116,7 +116,6 @@ public:
 
 protected:
   void OnPacketAcked (Ptr<TcpSocketState> tcb, Ptr<QuicSocketTxItem> ackedPacket);
-  virtual void OnRetransmissionTimeoutVerified (Ptr<TcpSocketState> tcb);
 
 
   /**
