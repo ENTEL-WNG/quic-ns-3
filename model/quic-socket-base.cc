@@ -151,6 +151,11 @@ QuicSocketBase::GetTypeId (void)
                    MakeTimeAccessor (&QuicSocketBase::GetMaxAckDelay,
                                      &QuicSocketBase::SetMaxAckDelay),
                    MakeTimeChecker ())
+    .AddAttribute ("MaxPacketsReceivedBeforeAckSend",
+                   "Send an ACK after receiving this many ack-eliciting packets, even before the delayed-ack timer fires (RFC 9000 13.2.2 recommends 2)",
+                   UintegerValue (2),
+                   MakeUintegerAccessor (&QuicSocketBase::m_kMaxPacketsReceivedBeforeAckSend),
+                   MakeUintegerChecker<uint32_t> ())
     .AddAttribute ("FlushOnClose", "Determines the connection close behavior",
                    BooleanValue (true),
                    MakeBooleanAccessor (&QuicSocketBase::m_flushOnClose),
@@ -255,11 +260,6 @@ QuicSocketState::GetTypeId (void)
                    DoubleValue (9.0 / 8),
                    MakeDoubleAccessor (&QuicSocketState::m_kTimeThreshold),
                    MakeDoubleChecker<double> (0))
-    .AddAttribute ("kMaxPacketsReceivedBeforeAckSend",
-                   "The maximum number of packets without sending an ACK",
-                   UintegerValue (2),
-                   MakeUintegerAccessor (&QuicSocketState::m_kMaxPacketsReceivedBeforeAckSend),
-                   MakeUintegerChecker<uint32_t> ())
     .AddAttribute ("kGranularity",
                    "The clock granularity (default 1 time step)",
                    TimeValue (TimeStep (1)),
@@ -301,7 +301,6 @@ QuicSocketState::QuicSocketState ()
     m_kTimeThreshold (9.0 / 8),
     m_kInitialRtt (MilliSeconds (333)),
     m_kGranularity (MilliSeconds (1)),
-    m_kMaxPacketsReceivedBeforeAckSend (20),
     m_latestRtt (Seconds (0)),
     m_smoothedRtt (MilliSeconds (333)),
     m_rttVar (MilliSeconds (333 / 2)),
@@ -339,7 +338,6 @@ QuicSocketState::QuicSocketState (const QuicSocketState &other)
     m_kTimeThreshold (other.m_kTimeThreshold),
     m_kInitialRtt (other.m_kInitialRtt),
     m_kGranularity (other.m_kGranularity),
-    m_kMaxPacketsReceivedBeforeAckSend (other.m_kMaxPacketsReceivedBeforeAckSend),
     m_latestRtt (other.m_latestRtt),
     m_smoothedRtt (other.m_smoothedRtt),
     m_rttVar (other.m_rttVar),
@@ -469,6 +467,8 @@ QuicSocketBase::QuicSocketBase (void)
     m_max_ack_delay (MilliSeconds (25)),
     m_initial_max_stream_id_uni (0),
     m_maxTrackedGaps (20),
+    // Local ACK-generation policy
+    m_kMaxPacketsReceivedBeforeAckSend (2),
     // Transport Parameters management
     m_receivedTransportParameters (false),
     // Timers and Events
@@ -548,6 +548,8 @@ QuicSocketBase::QuicSocketBase (const QuicSocketBase& sock)   // Copy constructo
     m_max_ack_delay (sock.m_max_ack_delay),
     m_initial_max_stream_id_uni (sock.m_initial_max_stream_id_uni),
     m_maxTrackedGaps (sock.m_maxTrackedGaps),
+    // Local ACK-generation policy
+    m_kMaxPacketsReceivedBeforeAckSend (sock.m_kMaxPacketsReceivedBeforeAckSend),
     // Transport Params Management
     m_receivedTransportParameters (sock.m_receivedTransportParameters),
     // Timers
@@ -1111,7 +1113,7 @@ if (space == INITIAL_DATA || space == HANDSHAKE_DATA)
       pnSpace.m_queue_ack = true;
       pnSpace.m_sendAckEvent = Simulator::Schedule (TimeStep (1), static_cast<void (QuicSocketBase::*)(PacketNumberSpace)>(&QuicSocketBase::SendAck), this, space);
     }
-  else if (pnSpace.m_numPacketsReceivedSinceLastAckSent >= m_tcb->m_kMaxPacketsReceivedBeforeAckSend)
+  else if (pnSpace.m_numPacketsReceivedSinceLastAckSent >= m_kMaxPacketsReceivedBeforeAckSend)
     {
       NS_LOG_INFO ("immediately schedule ACK - threshold reached");
       pnSpace.m_queue_ack = true;
@@ -1759,6 +1761,33 @@ QuicSocketBase::GetRxAvailable (void) const
   return m_rxBuffer->Available ();
 }
 
+uint64_t
+QuicSocketBase::GetTotalDistinctRxBytes (void) const
+{
+  NS_LOG_FUNCTION (this);
+
+  if (!m_quicl5)
+    {
+      return 0;
+    }
+  uint64_t total = 0;
+  for (const Ptr<QuicStreamBase>& stream : m_quicl5->GetStreams ())
+    {
+      // Distinct stream bytes received = contiguous in-order offset already
+      // released (GetRecvSize) + bytes still held out-of-order in the reorder
+      // buffer (Size). In-order frames are delivered without ever entering the
+      // reorder buffer, so both terms are needed; together they never double
+      // count and equal delivered + awaiting.
+      total += stream->GetRecvSize ();
+      Ptr<QuicStreamRxBuffer> rxb = stream->GetRxBuffer ();
+      if (rxb)
+        {
+          total += rxb->Size ();
+        }
+    }
+  return total;
+}
+
 /* Inherit from Socket class: Returns error code */
 enum Socket::SocketErrno
 QuicSocketBase::GetErrno (void) const
@@ -2385,7 +2414,7 @@ QuicSocketBase::OnSendingTransportParameters ()
   QuicTransportParameters transportParameters;
   transportParameters = transportParameters.CreateTransportParameters (
     m_initial_max_stream_data, m_max_data, m_initial_max_stream_id_bidi,
-    (uint16_t) m_idleTimeout.Get ().GetSeconds (),
+    (uint32_t) m_idleTimeout.Get ().GetSeconds (),
     m_tcb->m_segmentSize,
     m_ack_delay_exponent, (uint16_t) m_max_ack_delay.GetMilliSeconds (),
     m_initial_max_stream_id_uni);
@@ -2446,7 +2475,7 @@ QuicSocketBase::OnReceivedTransportParameters (
 
   m_idleTimeout = Time (
     std::min (transportParameters.GetIdleTimeout (),
-              (uint16_t) m_idleTimeout.Get ().GetSeconds ()) * 1e9);
+              (uint32_t) m_idleTimeout.Get ().GetSeconds ()) * 1e9);
 
   m_tcb->m_peerMaxAckDelay = MilliSeconds (transportParameters.GetMaxAckDelay ());
 

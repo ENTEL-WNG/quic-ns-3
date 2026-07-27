@@ -106,7 +106,6 @@ public:
 
   Time m_kInitialRtt;                    //!< The default RTT used before an RTT sample is taken.
   Time m_kGranularity;                   //!< The clock granularity (default 1ms).
-  uint32_t m_kMaxPacketsReceivedBeforeAckSend;  //!< The number of packets to be received before an ACK is triggered
 
   // Loss Detection variables of interest (RFC 9002 Appendix A.3)
   Time m_latestRtt;                         /**< The most recent RTT measurement made when receiving an ack for a
@@ -666,6 +665,19 @@ public:
   virtual enum SocketType GetSocketType (void) const;
 
   /**
+   * \brief Cumulative DISTINCT stream payload bytes received on this connection.
+   *
+   * Sums each stream's reorder-buffer total (see
+   * QuicStreamRxBuffer::GetTotalReceivedBytes): in-order-delivered PLUS whatever
+   * is still stuck out-of-order in the receiver, excluding duplicate
+   * retransmissions and QUIC headers. Lets an application measure how much data
+   * has physically reached the receiver independently of head-of-line blocking.
+   *
+   * \return cumulative distinct stream bytes received across all streams
+   */
+  uint64_t GetTotalDistinctRxBytes (void) const;
+
+  /**
    * \brief Set the latency bound for a specified stream
    *
    * \param streamId The stream ID
@@ -906,6 +918,9 @@ protected:
   Time m_max_ack_delay;                  //!< The maximum ack delay we promise to the peer (RFC 9000 18.2); purely local ACK-sending policy, not congestion-control state
   uint32_t m_initial_max_stream_id_uni;  //!< The initial maximum number of application-owned unidirectional streams the peer may initiate
   uint32_t m_maxTrackedGaps;             //!< The maximum number of gaps in an ACK
+
+  // Local ACK-generation policy (RFC 9000 13.2.2); not negotiated with the peer
+  uint32_t m_kMaxPacketsReceivedBeforeAckSend;  //!< Send an ACK after this many received ack-eliciting packets, even if the delayed-ack timer has not fired yet
 
   // Transport Parameters management
   bool m_receivedTransportParameters;      //!< Check if Transport Parameters are already been received

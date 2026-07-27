@@ -94,7 +94,7 @@ QuicTransportParameters::CalculateHeaderLength () const
   len += paramLen (m_initial_max_stream_data);
   len += paramLen (m_initial_max_data);
   len += paramLen (m_initial_max_stream_id_bidi);
-  len += paramLen (m_idleTimeout * 1000);
+  len += paramLen (static_cast<uint64_t> (m_idleTimeout) * 1000);
   len += paramLen (m_max_packet_size);
   len += paramLen (m_ack_delay_exponent);
   len += paramLen (m_max_ack_delay);
@@ -172,7 +172,7 @@ QuicTransportParameters::Serialize (Buffer::Iterator start) const
   writeParam (INITIAL_MAX_STREAM_DATA_BIDI_LOCAL, m_initial_max_stream_data);
   writeParam (INITIAL_MAX_DATA, m_initial_max_data);
   writeParam (INITIAL_MAX_STREAMS_BIDI, m_initial_max_stream_id_bidi);
-  writeParam (MAX_IDLE_TIMEOUT, m_idleTimeout * 1000);
+  writeParam (MAX_IDLE_TIMEOUT, static_cast<uint64_t> (m_idleTimeout) * 1000);
   writeParam (MAX_UDP_PAYLOAD_SIZE, m_max_packet_size);
   writeParam (ACK_DELAY_EXPONENT, m_ack_delay_exponent);
   writeParam (MAX_ACK_DELAY, m_max_ack_delay);
@@ -247,7 +247,7 @@ QuicTransportParameters::Deserialize (Buffer::Iterator start)
       case INITIAL_MAX_STREAM_DATA_BIDI_LOCAL: m_initial_max_stream_data = (uint32_t)val; break;
       case INITIAL_MAX_DATA: m_initial_max_data = (uint32_t)val; break;
       case INITIAL_MAX_STREAMS_BIDI: m_initial_max_stream_id_bidi = (uint32_t)val; break;
-      case MAX_IDLE_TIMEOUT: m_idleTimeout = (uint16_t)(val / 1000); break;
+      case MAX_IDLE_TIMEOUT: m_idleTimeout = (uint32_t)(val / 1000); break;
       case MAX_UDP_PAYLOAD_SIZE: m_max_packet_size = (uint16_t)val; break;
       case ACK_DELAY_EXPONENT: m_ack_delay_exponent = (uint8_t)val; break;
       case MAX_ACK_DELAY: m_max_ack_delay = (uint16_t)val; break;
@@ -293,7 +293,7 @@ QuicTransportParameters::Print (std::ostream &os) const
 }
 
 QuicTransportParameters
-QuicTransportParameters::CreateTransportParameters (uint32_t initial_max_stream_data, uint32_t initial_max_data, uint32_t initial_max_stream_id_bidi, uint16_t idleTimeout,
+QuicTransportParameters::CreateTransportParameters (uint32_t initial_max_stream_data, uint32_t initial_max_data, uint32_t initial_max_stream_id_bidi, uint32_t idleTimeout,
                                                     uint16_t max_packet_size, uint8_t ack_delay_exponent, uint16_t max_ack_delay, uint32_t initial_max_stream_id_uni, bool disable_migration)
 {
   QuicTransportParameters transport;
@@ -340,8 +340,8 @@ uint8_t QuicTransportParameters::GetAckDelayExponent () const { return m_ack_del
 void QuicTransportParameters::SetAckDelayExponent (uint8_t ackDelayExponent) { m_ack_delay_exponent = ackDelayExponent; }
 uint16_t QuicTransportParameters::GetMaxAckDelay () const { return m_max_ack_delay; }
 void QuicTransportParameters::SetMaxAckDelay (uint16_t maxAckDelay) { m_max_ack_delay = maxAckDelay; }
-uint16_t QuicTransportParameters::GetIdleTimeout () const { return m_idleTimeout; }
-void QuicTransportParameters::SetIdleTimeout (uint16_t idleTimeout) { m_idleTimeout = idleTimeout; }
+uint32_t QuicTransportParameters::GetIdleTimeout () const { return m_idleTimeout; }
+void QuicTransportParameters::SetIdleTimeout (uint32_t idleTimeout) { m_idleTimeout = idleTimeout; }
 uint32_t QuicTransportParameters::GetInitialMaxData () const { return m_initial_max_data; }
 void QuicTransportParameters::SetInitialMaxData (uint32_t initialMaxData) { m_initial_max_data = initialMaxData; }
 uint32_t QuicTransportParameters::GetInitialMaxStreamData () const { return m_initial_max_stream_data; }

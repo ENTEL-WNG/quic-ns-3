@@ -112,7 +112,7 @@ public:
    * \param disable_migration true if migration should be disabled
    * \return the generated QuicTransportParameters
    */
-  static QuicTransportParameters CreateTransportParameters (uint32_t initial_max_stream_data, uint32_t initial_max_data, uint32_t initial_max_stream_id_bidi, uint16_t idleTimeout,
+  static QuicTransportParameters CreateTransportParameters (uint32_t initial_max_stream_data, uint32_t initial_max_data, uint32_t initial_max_stream_id_bidi, uint32_t idleTimeout,
                                                             uint16_t max_packet_size, uint8_t ack_delay_exponent, uint16_t max_ack_delay, uint32_t initial_max_stream_id_uni, bool disable_migration = true);
 
   // Getters, Setters and Controls
@@ -133,13 +133,13 @@ public:
    * \brief Get the idle timeout
    * \return The idle timeout for this QuicTransportParameters
    */
-  uint16_t GetIdleTimeout () const;
+  uint32_t GetIdleTimeout () const;
 
   /**
    * \brief Set the idle timeout
    * \param idleTimeout the idle timeout for this QuicTransportParameters
    */
-  void SetIdleTimeout (uint16_t idleTimeout);
+  void SetIdleTimeout (uint32_t idleTimeout);
 
   /**
    * \brief Get the initial max data limit
@@ -309,7 +309,7 @@ private:
   uint32_t m_initial_max_stream_data;     //!< The initial value for the maximum data that can be sent on any newly created stream
   uint32_t m_initial_max_data;            //!< The initial value for the maximum amount of data that can be sent on the connection
   uint32_t m_initial_max_stream_id_bidi;  //!< The initial maximum number of application-owned bidirectional streams the peer may initiate
-  uint16_t m_idleTimeout;                 //!< The idle timeout value in seconds
+  uint32_t m_idleTimeout;                 //!< The idle timeout value in seconds
   uint16_t m_max_packet_size;             //!< The limit on the size of packets that the endpoint is willing to receive
   uint8_t m_ack_delay_exponent;           //!< The exponent used to decode the ack delay field in the ACK frame
   uint16_t m_max_ack_delay;               //!< The maximum amount of time in milliseconds by which the endpoint will delay sending acknowledgments
