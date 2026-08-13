@@ -955,10 +955,8 @@ QuicSocketBase::AppendingTx (Ptr<Packet> frame, PacketNumberSpace space)
         }
       else
         {
-          uint32_t win = AvailableWindow ();
           NS_LOG_DEBUG (
-            "Added packet to the buffer - txBufSize = " << m_txBuffer->AppSize ()
-                                                        << " Window = " << win);
+            "Added packet to the buffer - txBufSize = " << m_txBuffer->AppSize ());
 
           // Artificially delay the "flush" so that L5 has finished putting app bytes in to the buffer
           Simulator::Schedule (MicroSeconds (1), &QuicSocketBase::SendPendingData, this, m_connected);

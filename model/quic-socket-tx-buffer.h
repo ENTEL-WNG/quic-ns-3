@@ -410,11 +410,6 @@ public:
 private:
   typedef std::list<Ptr<QuicSocketTxItem> > QuicTxPacketList;      //!< container for data stored in the buffer
 
-  /**
-   * Discard acknowledged data from the sent list
-   */
-  void CleanSentList (PacketNumberSpace space);
-
   QuicTxPacketList m_sentList[3];        //!< List of sent packets with additional info per space
   QuicTxPacketList m_cryptoList[3];      //!< List of waiting CRYPTO frame packets with additional info per space (only 0 and 1 used)
   uint32_t m_maxBuffer;                  //!< Max number of data bytes in buffer (SND.WND)

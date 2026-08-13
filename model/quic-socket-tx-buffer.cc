@@ -488,12 +488,21 @@ std::vector<Ptr<QuicSocketTxItem> > QuicSocketTxBuffer::OnAckUpdate (
   NS_LOG_INFO (
     "Space: " << space << " Largest ACK: " << largestAcknowledged << ", blocks: " << block_print.str () << ", gaps: " << gap_print.str ());
 
-  // Iterate over the ACK blocks and gaps
+  // Iterate over the ACK blocks and gaps in a single reverse sweep of the
+  // sent list, shared across all blocks: the list is ordered ascending by
+  // packet number and the (block, gap) pairs are ordered descending, so
+  // sent_it only ever needs to move forward-in-reverse. Previously this
+  // restarted from rbegin() for every ACK block, rescanning (and
+  // re-skipping, since already-sacked items are a no-op) the newest part
+  // of the list once per block -- O(ackBlockCount * listSize) instead of
+  // O(listSize). With a very large in-flight backlog (e.g. after a long
+  // DTN outage) and multiple SACK blocks in one ACK, that difference is
+  // the dominant cost of processing the ACK.
+  auto sent_it = m_sentList[space].rbegin ();
   for (uint32_t numAckBlockAnalyzed = 0; numAckBlockAnalyzed < ackBlockCount;
        ++numAckBlockAnalyzed, ++ack_it, ++gap_it)
     {
-      for (auto sent_it = m_sentList[space].rbegin ();
-           sent_it != m_sentList[space].rend () and !m_sentList[space].empty (); ++sent_it)                    // Visit sentList in reverse Order for optimization
+      while (sent_it != m_sentList[space].rend ())
         {
           NS_LOG_LOGIC (
             "Consider packet " << (*sent_it)->m_packetNumber << " (ACK block " << SequenceNumber32 ((*ack_it)) << ")");
@@ -523,6 +532,7 @@ std::vector<Ptr<QuicSocketTxItem> > QuicSocketTxBuffer::OnAckUpdate (
               UpdateRateSample ((*sent_it));
             }
 
+          ++sent_it;
         }
     }
   NS_LOG_LOGIC ("Mark lost packets");
@@ -531,45 +541,64 @@ std::vector<Ptr<QuicSocketTxItem> > QuicSocketTxBuffer::OnAckUpdate (
   Time loss_delay = std::max (tcbd->m_kTimeThreshold * std::max (tcbd->m_latestRtt, tcbd->m_smoothedRtt), MilliSeconds (1)); // kGranularity = 1ms
   Time lost_send_time = Now () - loss_delay;
 
-  for (auto sent_it = m_sentList[space].begin ();
-       sent_it != m_sentList[space].end () and !m_sentList[space].empty ();
-       ++sent_it)
+  // Single forward pass folding loss detection together with
+  // CleanSentList's sacked-packet cleanup (previously two full walks of
+  // the same list back to back). Sacked and lost are mutually exclusive
+  // here (loss detection never marks a sacked packet lost), so per item
+  // this is either "clean it up" or "run loss detection" -- same net
+  // effect as the two separate passes, one traversal instead of two.
+  auto sweep_it = m_sentList[space].begin ();
+  while (sweep_it != m_sentList[space].end ())
     {
-      Ptr<QuicSocketTxItem> unacked = *sent_it;
-      if (unacked->m_sacked || unacked->m_lost)
-        {
-          continue;
-        }
+      Ptr<QuicSocketTxItem> unacked = *sweep_it;
 
-      if (unacked->m_packetNumber > m_socket->m_pnSpaces[space].m_largestAcked)
+      if (unacked->m_sacked)
         {
-          continue;
-        }
-
-      // Mark packet as lost, or set time when it should be marked.
-      if (unacked->m_lastSent <= lost_send_time ||
-          m_socket->m_pnSpaces[space].m_largestAcked.GetValue () >= unacked->m_packetNumber.GetValue () + tcbd->m_kPacketThreshold)
-        {
-          unacked->m_lost = true;
-          NS_LOG_INFO ("Packet " << unacked->m_packetNumber << " in space " << space << " marked lost. PN distance "
-                       << (m_socket->m_pnSpaces[space].m_largestAcked.GetValue () - unacked->m_packetNumber.GetValue ())
-                       << " or time distance " << (Now () - unacked->m_lastSent).GetSeconds () << "s");
-        }
-      else
-        {
-          if (m_socket->m_pnSpaces[space].m_lossTime == Seconds (0))
+          unacked->m_acked = true;
+          // Subtract the tracked wire bytes
+          // Use logic to prevent underflow if logic ever desyncs
+          if (m_sentSize >= unacked->m_wireBytes)
             {
-              m_socket->m_pnSpaces[space].m_lossTime = unacked->m_lastSent + loss_delay;
+              m_sentSize -= unacked->m_wireBytes;
             }
           else
             {
-              m_socket->m_pnSpaces[space].m_lossTime = std::min (m_socket->m_pnSpaces[space].m_lossTime, unacked->m_lastSent + loss_delay);
+              m_sentSize = 0;
+              NS_LOG_WARN ("m_sentSize underflow detected in CleanSentList");
+            }
+
+          sweep_it = m_sentList[space].erase (sweep_it);
+          NS_LOG_LOGIC ("Cleaning packet " << unacked->m_packetNumber << " from sent buffer");
+          continue;
+        }
+
+      if (!unacked->m_lost && unacked->m_packetNumber <= m_socket->m_pnSpaces[space].m_largestAcked)
+        {
+          // Mark packet as lost, or set time when it should be marked.
+          if (unacked->m_lastSent <= lost_send_time ||
+              m_socket->m_pnSpaces[space].m_largestAcked.GetValue () >= unacked->m_packetNumber.GetValue () + tcbd->m_kPacketThreshold)
+            {
+              unacked->m_lost = true;
+              NS_LOG_INFO ("Packet " << unacked->m_packetNumber << " in space " << space << " marked lost. PN distance "
+                           << (m_socket->m_pnSpaces[space].m_largestAcked.GetValue () - unacked->m_packetNumber.GetValue ())
+                           << " or time distance " << (Now () - unacked->m_lastSent).GetSeconds () << "s");
+            }
+          else
+            {
+              if (m_socket->m_pnSpaces[space].m_lossTime == Seconds (0))
+                {
+                  m_socket->m_pnSpaces[space].m_lossTime = unacked->m_lastSent + loss_delay;
+                }
+              else
+                {
+                  m_socket->m_pnSpaces[space].m_lossTime = std::min (m_socket->m_pnSpaces[space].m_lossTime, unacked->m_lastSent + loss_delay);
+                }
             }
         }
+
+      ++sweep_it;
     }
 
-  // Clean up acked packets and return new ACKed packet vector
-  CleanSentList (space);
   // Clear loss detection variables if no data in flight
   if (BytesInFlight(space) == 0)
   {
@@ -893,38 +922,6 @@ uint32_t QuicSocketTxBuffer::GetLost ()
         }
     }
   return lostCount;
-}
-
-void QuicSocketTxBuffer::CleanSentList (PacketNumberSpace space)
-{
-  auto sent_it = m_sentList[space].begin ();
-  while (sent_it != m_sentList[space].end ())
-    {
-      Ptr<QuicSocketTxItem> item = *sent_it;
-      // Only clean if Sacked (leave Lost for Retransmission)
-      if (item->m_sacked) 
-        {
-          item->m_acked = true;
-          // Subtract the tracked wire bytes
-          // Use logic to prevent underflow if logic ever desyncs
-          if (m_sentSize >= item->m_wireBytes)
-            {
-            m_sentSize -= item->m_wireBytes;
-            }
-          else
-            {
-            m_sentSize = 0;
-            NS_LOG_WARN("m_sentSize underflow detected in CleanSentList");
-            }
-            
-          sent_it = m_sentList[space].erase (sent_it);
-          NS_LOG_LOGIC ("Cleaning packet " << item->m_packetNumber << " from sent buffer");
-        }
-      else
-        {
-          sent_it++;
-        }
-    }
 }
 
 uint32_t QuicSocketTxBuffer::Available (void) const
