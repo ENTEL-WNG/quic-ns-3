@@ -233,6 +233,9 @@ QuicSocketTxBuffer::QuicSocketTxBuffer () :
     {
       m_cryptoList[i] = QuicTxPacketList ();
       m_sentList[i] = QuicTxPacketList ();
+      m_inFlightWire[i] = 0;
+      m_inFlightPayload[i] = 0;
+      m_inFlightDirty[i] = false;
     }
 }
 
@@ -353,6 +356,7 @@ Ptr<Packet> QuicSocketTxBuffer::NextCryptoSequence (
       m_cryptoSize -= currentPacket->GetSize ();
       m_sentList[space].insert (m_sentList[space].end (), outItem);
       m_sentSize += outItem->m_wireBytes;
+      NoteItemSent (space, outItem);
       --m_numCryptoFramesInBuffer;
       Ptr<Packet> toRet = outItem->m_packet;
       return toRet;
@@ -444,6 +448,7 @@ Ptr<QuicSocketTxItem> QuicSocketTxBuffer::GetNewSegment (uint32_t numBytes, Pack
       
       m_sentList[space].insert (m_sentList[space].end (), outItem);
       m_sentSize += outItem->m_wireBytes;
+      NoteItemSent (space, outItem);
     }
 
   NS_LOG_INFO (
@@ -459,6 +464,9 @@ std::vector<Ptr<QuicSocketTxItem> > QuicSocketTxBuffer::OnAckUpdate (
   PacketNumberSpace space)
 {
   NS_LOG_FUNCTION (this << space);
+
+  MarkInFlightDirty (space);
+
   std::vector<uint32_t> compAckBlocks = additionalAckBlocks;
   std::vector<uint32_t> compGaps = gaps;
 
@@ -613,6 +621,7 @@ void QuicSocketTxBuffer::ResetSentList (uint32_t keepItems)
   NS_LOG_FUNCTION (this << keepItems);
   for (int i = 0; i < 3; i++)
     {
+      MarkInFlightDirty (static_cast<PacketNumberSpace> (i));
       uint32_t kept = 0;
       for (auto sent_it = m_sentList[i].rbegin ();
            sent_it != m_sentList[i].rend () and !m_sentList[i].empty ();
@@ -629,6 +638,8 @@ void QuicSocketTxBuffer::ResetSentList (uint32_t keepItems)
 bool QuicSocketTxBuffer::MarkAsLost (const SequenceNumber32 seq, PacketNumberSpace space)
 {
   NS_LOG_FUNCTION (this << seq << space);
+
+  MarkInFlightDirty (space);
   bool found = false;
   for (auto sent_it = m_sentList[space].begin ();
        sent_it != m_sentList[space].end () and !m_sentList[space].empty (); ++sent_it)
@@ -646,6 +657,8 @@ uint32_t QuicSocketTxBuffer::Retransmission (SequenceNumber32 packetNumber, Pack
 {
   NS_LOG_FUNCTION (this << space);
   NS_ASSERT_MSG(m_socket, "m_socket must be set before calling Retransmission");
+
+  MarkInFlightDirty (space);
   
   uint32_t toRetx = 0;
 
@@ -830,6 +843,9 @@ uint32_t QuicSocketTxBuffer::Retransmission (SequenceNumber32 packetNumber, Pack
 std::vector<Ptr<QuicSocketTxItem> > QuicSocketTxBuffer::DetectLostPackets (Ptr<TcpSocketState> tcb, PacketNumberSpace space)
 {
   NS_LOG_FUNCTION (this << space);
+
+  MarkInFlightDirty (space);
+
   std::vector<Ptr<QuicSocketTxItem>> newly_lost;
   Ptr<QuicSocketState> tcbd = dynamic_cast<QuicSocketState*> (&(*tcb));
   NS_ASSERT_MSG (tcbd, "tcb is not a QuicSocketState");
@@ -957,6 +973,75 @@ uint32_t QuicSocketTxBuffer::GetNumCryptoFramesInBuffer (PacketNumberSpace space
   return m_cryptoList[space].size ();
 }
 
+void QuicSocketTxBuffer::MarkInFlightDirty (PacketNumberSpace space)
+{
+  m_inFlightDirty[space] = true;
+}
+
+void QuicSocketTxBuffer::NoteItemSent (PacketNumberSpace space, Ptr<QuicSocketTxItem> item)
+{
+  if (m_inFlightDirty[space])
+    {
+      // The next reader rebuilds the totals from scratch; nothing to keep up to date.
+      return;
+    }
+  // A freshly sent item is neither sacked nor lost, so it always counts as in flight.
+  m_inFlightWire[space] += item->m_wireBytes > 0 ? item->m_wireBytes : item->m_packet->GetSize ();
+  m_inFlightPayload[space] += item->GetStreamPayloadSize ();
+}
+
+void QuicSocketTxBuffer::AssertInFlightConsistent (PacketNumberSpace space) const
+{
+#ifdef NS3_ASSERT_ENABLE
+  if (m_inFlightDirty[space])
+    {
+      // Stale by design: the next reader rebuilds the totals, so there is nothing to check.
+      return;
+    }
+
+  uint32_t wire = 0;
+  uint32_t payload = 0;
+  for (auto const& item : m_sentList[space])
+    {
+      if (!item->m_sacked && !item->m_lost)
+        {
+          wire += item->m_wireBytes > 0 ? item->m_wireBytes : item->m_packet->GetSize ();
+          payload += item->GetStreamPayloadSize ();
+        }
+    }
+
+  NS_ASSERT_MSG (wire == m_inFlightWire[space] && payload == m_inFlightPayload[space],
+                 "In-flight cache out of sync in packet number space " << space
+                 << ": cached wire=" << m_inFlightWire[space] << " actual=" << wire
+                 << ", cached payload=" << m_inFlightPayload[space] << " actual=" << payload
+                 << ". A sent list was mutated without updating the totals or marking the "
+                 "space dirty -- see MarkInFlightDirty().");
+#endif
+}
+
+void QuicSocketTxBuffer::RefreshInFlight (PacketNumberSpace space) const
+{
+  AssertInFlightConsistent (space);
+
+  if (!m_inFlightDirty[space])
+    {
+      return;
+    }
+  uint32_t wire = 0;
+  uint32_t payload = 0;
+  for (auto const& item : m_sentList[space])
+    {
+      if (!item->m_sacked && !item->m_lost)
+        {
+          wire += item->m_wireBytes > 0 ? item->m_wireBytes : item->m_packet->GetSize ();
+          payload += item->GetStreamPayloadSize ();
+        }
+    }
+  m_inFlightWire[space] = wire;
+  m_inFlightPayload[space] = payload;
+  m_inFlightDirty[space] = false;
+}
+
 uint32_t QuicSocketTxBuffer::BytesInFlight () const
 {
   NS_LOG_FUNCTION (this);
@@ -972,51 +1057,25 @@ uint32_t QuicSocketTxBuffer::BytesInFlight () const
 
 uint32_t QuicSocketTxBuffer::BytesInFlight (PacketNumberSpace space) const
 {
-  uint32_t inFlight = 0;
-  for (auto sent_it = m_sentList[space].begin ();
-       sent_it != m_sentList[space].end () and !m_sentList[space].empty (); ++sent_it)
-    {
-      if (!(*sent_it)->m_sacked && !(*sent_it)->m_lost)
-        {
-          inFlight += (*sent_it)->m_wireBytes > 0 ? (*sent_it)->m_wireBytes : (*sent_it)->m_packet->GetSize ();
-        }
-    }
-  return inFlight;
+  RefreshInFlight (space);
+  return m_inFlightWire[space];
 }
 
 uint32_t QuicSocketTxBuffer::GetCongestionControlledBytesInFlight () const
 {
   NS_LOG_FUNCTION (this);
-  uint32_t inFlight = 0;
   // RFC 9002: Congestion control applies to all packets, but often we only track ApplicationData
   // for standard congestion control logic in simple implementations.
-  for (auto sent_it = m_sentList[APPLICATION_DATA].begin ();
-       sent_it != m_sentList[APPLICATION_DATA].end () and !m_sentList[APPLICATION_DATA].empty (); ++sent_it)
-    {
-      if (!(*sent_it)->m_sacked && !(*sent_it)->m_lost)
-        {
-          inFlight += (*sent_it)->m_wireBytes > 0 ? (*sent_it)->m_wireBytes : (*sent_it)->m_packet->GetSize ();
-        }
-    }
-  return inFlight;
+  RefreshInFlight (APPLICATION_DATA);
+  return m_inFlightWire[APPLICATION_DATA];
 }
 
 uint32_t QuicSocketTxBuffer::GetHandshakeInFlight () const
 {
   NS_LOG_FUNCTION (this);
-  uint32_t inFlight = 0;
-  for (int i = 0; i < 2; i++) // INITIAL_DATA and HANDSHAKE_DATA
-    {
-      for (auto sent_it = m_sentList[i].begin ();
-           sent_it != m_sentList[i].end () and !m_sentList[i].empty (); ++sent_it)
-        {
-          if (!(*sent_it)->m_sacked && !(*sent_it)->m_lost)
-            {
-              inFlight += (*sent_it)->m_wireBytes > 0 ? (*sent_it)->m_wireBytes : (*sent_it)->m_packet->GetSize ();
-            }
-        }
-    }
-  return inFlight;
+  RefreshInFlight (INITIAL_DATA);
+  RefreshInFlight (HANDSHAKE_DATA);
+  return m_inFlightWire[INITIAL_DATA] + m_inFlightWire[HANDSHAKE_DATA];
 }
 
 void QuicSocketTxBuffer::SetQuicSocketState (Ptr<QuicSocketState> tcb)
@@ -1077,6 +1136,15 @@ void QuicSocketTxBuffer::UpdatePacketSent (SequenceNumber32 seq, uint32_t sz, Pa
     }
 
   m_sentSize += sz;
+
+  // Runs once per sent packet, so resize the cached total in place rather than
+  // dirtying the space (which would force a full rescan on the next send).
+  if (!m_inFlightDirty[space] && !item->m_sacked && !item->m_lost)
+    {
+      uint32_t previous = item->m_wireBytes > 0 ? item->m_wireBytes : item->m_packet->GetSize ();
+      m_inFlightWire[space] = m_inFlightWire[space] - previous + sz;
+    }
+
   item->m_wireBytes = sz;
   item->m_firstSentTime = m_tcb->m_firstSentTime;
   item->m_deliveredTime = m_tcb->m_deliveredTime;
@@ -1088,6 +1156,8 @@ void QuicSocketTxBuffer::UpdatePacketSent (SequenceNumber32 seq, uint32_t sz, Pa
 void QuicSocketTxBuffer::DiscardSpace (PacketNumberSpace space)
 {
   NS_LOG_FUNCTION (this << space);
+
+  MarkInFlightDirty (space);
 
   // 1. Correctly update m_sentSize before clearing sent list
   for (auto const& item : m_sentList[space])
@@ -1273,16 +1343,10 @@ QuicSocketTxBuffer::GetPayloadBytesInFlight () const
   // Sum up payload bytes across all packet number spaces
   for (uint32_t space = 0; space < 3; ++space)
     {
-      for (auto it = m_sentList[space].begin (); it != m_sentList[space].end (); ++it)
-        {
-          Ptr<QuicSocketTxItem> item = *it;
-          if (!item->m_sacked && !item->m_lost)
-            {
-              payloadBytesInFlight += item->GetStreamPayloadSize ();
-            }
-        }
+      RefreshInFlight (static_cast<PacketNumberSpace> (space));
+      payloadBytesInFlight += m_inFlightPayload[space];
     }
-  
+
   NS_LOG_INFO ("Payload bytes in flight: " << payloadBytesInFlight);
   return payloadBytesInFlight;
 }

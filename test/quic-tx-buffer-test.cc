@@ -801,6 +801,131 @@ QuicTxBufferPureLogicTestCase::TestStreamAdd ()
  * \ingroup internet-test
  * \ingroup tests
  *
+ * \brief Check that the memoized in-flight totals survive every kind of sent-list mutation
+ *
+ * BytesInFlight(), GetCongestionControlledBytesInFlight() and GetPayloadBytesInFlight() are
+ * served from per-space totals that the send path maintains incrementally, so a mutation that
+ * neither updates nor invalidates them would silently return a stale window. This walks a
+ * buffer through send, wire-size revision, loss marking, acknowledgement, reset and discard,
+ * checking the reported totals against independently computed values at each step.
+ */
+class QuicTxBufferInFlightCacheTestCase : public TestCase
+{
+public:
+  QuicTxBufferInFlightCacheTestCase ();
+  virtual ~QuicTxBufferInFlightCacheTestCase ();
+
+private:
+  virtual void DoRun (void);
+
+  /**
+   * \brief Buffer a STREAM frame and hand it to the sent list
+   *
+   * \param txBuf the buffer under test
+   * \param packetNumber the packet number to assign
+   * \param offset the stream offset of the frame
+   */
+  void SendOne (QuicSocketTxBuffer &txBuf, uint32_t packetNumber, uint32_t offset);
+};
+
+QuicTxBufferInFlightCacheTestCase::QuicTxBufferInFlightCacheTestCase () :
+    TestCase ("QuicTxBuffer In-Flight Cache Consistency")
+{
+}
+
+QuicTxBufferInFlightCacheTestCase::~QuicTxBufferInFlightCacheTestCase ()
+{
+}
+
+void
+QuicTxBufferInFlightCacheTestCase::SendOne (QuicSocketTxBuffer &txBuf, uint32_t packetNumber,
+                                            uint32_t offset)
+{
+  Ptr<Packet> p = Create<Packet> (1196);
+  QuicSubheader sub = QuicSubheader::CreateStreamSubHeader (1, offset, p->GetSize (),
+                                                            false, true, false);
+  p->AddHeader (sub);
+  txBuf.Add (p);
+  txBuf.NextSequence (1200, SequenceNumber32 (packetNumber), APPLICATION_DATA);
+}
+
+void
+QuicTxBufferInFlightCacheTestCase::DoRun ()
+{
+  QuicSocketTxBuffer txBuf;
+
+  Ptr<QuicSocketTxScheduler> sched = CreateObject<QuicSocketTxScheduler> ();
+  txBuf.SetScheduler (sched);
+  Ptr<QuicSocketBase> socket = CreateObject<QuicSocketBase> ();
+  txBuf.SetSocket (socket);
+  Ptr<QuicSocketState> tcbd = CreateObject<QuicSocketState> ();
+  txBuf.SetQuicSocketState (tcbd);
+
+  NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (), 0, "Fresh buffer reports bytes in flight");
+  NS_TEST_ASSERT_MSG_EQ (txBuf.GetPayloadBytesInFlight (), 0,
+                         "Fresh buffer reports payload in flight");
+
+  // Sending grows the totals incrementally: 1200 wire bytes carrying 1196 payload bytes each.
+  for (uint32_t i = 1; i <= 3; ++i)
+    {
+      SendOne (txBuf, i, (i - 1) * 1200);
+      NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (), i * 1200,
+                             "Wrong wire bytes in flight after sending packet " << i);
+      NS_TEST_ASSERT_MSG_EQ (txBuf.GetPayloadBytesInFlight (), i * 1196,
+                             "Wrong payload bytes in flight after sending packet " << i);
+    }
+
+  // Congestion control only accounts for APPLICATION_DATA, which is all we have sent.
+  NS_TEST_ASSERT_MSG_EQ (txBuf.GetCongestionControlledBytesInFlight (), 3600,
+                         "Congestion controlled bytes disagree with total wire bytes");
+
+  // Revising a packet's wire size (the header overhead is known only once it is serialised)
+  // must resize the total in place rather than leave the old contribution behind.
+  txBuf.UpdatePacketSent (SequenceNumber32 (3), 1250, APPLICATION_DATA);
+  NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (), 3650,
+                         "Wire bytes not adjusted after a packet was resized");
+  NS_TEST_ASSERT_MSG_EQ (txBuf.GetPayloadBytesInFlight (), 3588,
+                         "Payload bytes changed by a wire-size revision");
+
+  // A packet declared lost stops counting against the window.
+  txBuf.MarkAsLost (SequenceNumber32 (2), APPLICATION_DATA);
+  NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (), 2450,
+                         "Lost packet still counted in wire bytes in flight");
+  NS_TEST_ASSERT_MSG_EQ (txBuf.GetPayloadBytesInFlight (), 2392,
+                         "Lost packet still counted in payload bytes in flight");
+
+  // Acknowledging packet 1 both clears its in-flight contribution and erases it from the list.
+  std::vector<uint32_t> additionalAckBlocks;
+  std::vector<uint32_t> gaps;
+  additionalAckBlocks.push_back (0);
+  gaps.push_back (0);
+  std::vector<Ptr<QuicSocketTxItem>> acked = txBuf.OnAckUpdate (tcbd, 1, additionalAckBlocks,
+                                                                gaps, APPLICATION_DATA);
+  NS_TEST_ASSERT_MSG_EQ (acked.size (), 1, "Wrong number of newly acknowledged packets");
+  NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (), 1250,
+                         "Acknowledged packet still counted in wire bytes in flight");
+  NS_TEST_ASSERT_MSG_EQ (txBuf.GetPayloadBytesInFlight (), 1196,
+                         "Acknowledged packet still counted in payload bytes in flight");
+
+  // ResetSentList marks every unacknowledged packet lost, emptying the window.
+  txBuf.ResetSentList (0);
+  NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (), 0,
+                         "Wire bytes still in flight after the sent list was reset");
+  NS_TEST_ASSERT_MSG_EQ (txBuf.GetPayloadBytesInFlight (), 0,
+                         "Payload bytes still in flight after the sent list was reset");
+
+  // Discarding a packet number space drops whatever is left in it.
+  txBuf.DiscardSpace (APPLICATION_DATA);
+  NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (), 0,
+                         "Wire bytes still in flight after the space was discarded");
+  NS_TEST_ASSERT_MSG_EQ (txBuf.GetPayloadBytesInFlight (), 0,
+                         "Payload bytes still in flight after the space was discarded");
+}
+
+/**
+ * \ingroup internet-test
+ * \ingroup tests
+ *
  * \brief TestSuite for QuicTxBuffer
  */
 class QuicTxBufferTestSuite : public TestSuite
@@ -814,6 +939,7 @@ public:
 
     AddTestCase (new QuicTxBufferScheduledTestCase, TestCase::QUICK);
     AddTestCase (new QuicTxBufferPureLogicTestCase, TestCase::QUICK);
+    AddTestCase (new QuicTxBufferInFlightCacheTestCase, TestCase::QUICK);
   }
 };
 

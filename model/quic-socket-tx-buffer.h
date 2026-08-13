@@ -410,12 +410,58 @@ public:
 private:
   typedef std::list<Ptr<QuicSocketTxItem> > QuicTxPacketList;      //!< container for data stored in the buffer
 
+  /**
+   * \brief Mark the cached in-flight totals of a space as needing recomputation
+   *
+   * \param space the packet number space whose sent list changed
+   */
+  void MarkInFlightDirty (PacketNumberSpace space);
+
+  /**
+   * \brief Account for an item that was just appended to a sent list
+   *
+   * \param space the packet number space the item was added to
+   * \param item the freshly sent item (never sacked nor lost)
+   */
+  void NoteItemSent (PacketNumberSpace space, Ptr<QuicSocketTxItem> item);
+
+  /**
+   * \brief Recompute the cached in-flight totals of a space if they are stale
+   *
+   * \param space the packet number space to refresh
+   */
+  void RefreshInFlight (PacketNumberSpace space) const;
+
+  /**
+   * \brief Debug-build check that the cached in-flight totals are still exact
+   *
+   * The cache is only correct while every mutation of a sent list either updates it or
+   * marks the space dirty. m_sacked, m_lost and m_wireBytes are public, and sent items
+   * are handed out by OnAckUpdate() and DetectLostPackets(), so that invariant is not
+   * enforced by the type system: this recounts the list and aborts on any disagreement.
+   * The body compiles to nothing unless NS3_ASSERT_ENABLE is set, so optimized builds
+   * pay neither the walk nor the comparison.
+   *
+   * \param space the packet number space to verify
+   */
+  void AssertInFlightConsistent (PacketNumberSpace space) const;
+
   QuicTxPacketList m_sentList[3];        //!< List of sent packets with additional info per space
   QuicTxPacketList m_cryptoList[3];      //!< List of waiting CRYPTO frame packets with additional info per space (only 0 and 1 used)
   uint32_t m_maxBuffer;                  //!< Max number of data bytes in buffer (SND.WND)
   uint32_t m_cryptoSize;                 //!< Size of all CRYPTO frame data in the buffer
   uint32_t m_sentSize;                   //!< Total wire size of all packets currently in the sent list.
   uint32_t m_numCryptoFramesInBuffer;    //!< Number of CRYPTO frames buffered
+
+  // Memoized in-flight totals. QuicSocketBase::AvailableWindow queries these once per
+  // packet from inside its send loop, so recomputing them by walking m_sentList makes
+  // filling the congestion window quadratic in the number of packets in flight -- which
+  // stalls outright once the window holds millions of packets. The send path keeps them
+  // up to date in O(1); every other mutation of a sent list marks the space dirty, so the
+  // next reader recomputes it with a single pass.
+  mutable uint32_t m_inFlightWire[3];    //!< Cached wire bytes in flight, per space
+  mutable uint32_t m_inFlightPayload[3]; //!< Cached STREAM payload bytes in flight, per space
+  mutable bool m_inFlightDirty[3];       //!< Whether the cached totals need recomputation
 
   Ptr<QuicSocketTxScheduler> m_scheduler { nullptr };         //!< Scheduler
   Ptr<QuicSocketState> m_tcb { nullptr };
