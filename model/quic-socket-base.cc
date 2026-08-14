@@ -228,6 +228,10 @@ QuicSocketBase::GetTypeId (void)
                      "Receive QUIC packet from UDP protocol",
                      MakeTraceSourceAccessor (&QuicSocketBase::m_rxTrace),
                      "ns3::QuicSocketBase::QuicTxRxTracedCallback")
+    .AddTraceSource ("Retransmit",
+                     "Fires when the sender retransmits data, either via loss detection or a PTO probe",
+                     MakeTraceSourceAccessor (&QuicSocketBase::m_retransmitTrace),
+                     "ns3::QuicSocketBase::QuicRetransmitTracedCallback")
     .AddTraceSource ("HandshakeConfirmed",
                      "For clients, true when the server confirmed the handshake",
                      MakeTraceSourceAccessor (&QuicSocketBase::m_handshakeConfirmed),
@@ -1437,11 +1441,13 @@ QuicSocketBase::DoRetransmit (std::vector<Ptr<QuicSocketTxItem> > lostPackets)
   
   // Retransmit once per space
   // The packet numbers will be assigned inside Retransmission()
+  uint32_t retransmittedBytes = 0;
   for (auto &pair : spacesWithLoss)
     {
       PacketNumberSpace space = pair.first;
-      m_txBuffer->Retransmission (SequenceNumber32(0), space);
+      retransmittedBytes += m_txBuffer->Retransmission (SequenceNumber32(0), space);
     }
+  m_retransmitTrace (static_cast<uint32_t> (lostPackets.size ()), retransmittedBytes, RETRANSMIT_LOSS);
   SendPendingData (m_connected);
 }
 
@@ -1492,9 +1498,15 @@ QuicSocketBase::ReTxTimeout ()
       m_txBuffer->Add (ping, ptoSpace);
       
       // Force transmission of at least one packet bypassing window checks in SendPendingData
-      SendDataPacket (ptoSpace, GetSegSize (), m_connected);
-      
-      // Also try to send one more if possible (up to 2 packets)
+      int32_t sentRaw = static_cast<int32_t> (SendDataPacket (ptoSpace, GetSegSize (), m_connected));
+      uint32_t ptoProbeBytes = (sentRaw > 0) ? static_cast<uint32_t> (sentRaw) : 0;
+      if (ptoProbeBytes > 0)
+        {
+          m_retransmitTrace (1, ptoProbeBytes, RETRANSMIT_PTO);
+        }
+
+      // Also try to send one more if possible (up to 2 packets); this may send
+      // fresh app data rather than a retransmission, so it is not traced here
       SendPendingData (m_connected);
     }
   SetReTxTimeout ();

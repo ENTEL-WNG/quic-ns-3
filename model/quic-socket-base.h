@@ -730,6 +730,18 @@ public:
   typedef void (*QuicTxRxTracedCallback)(const Ptr<const Packet> packet, const QuicHeader& header,
                                          const Ptr<const QuicSocketBase> socket);
 
+  static constexpr uint8_t RETRANSMIT_LOSS = 0; //!< Retransmit trace reason: loss detection (RFC 9002 Sec. 6.1)
+  static constexpr uint8_t RETRANSMIT_PTO  = 1; //!< Retransmit trace reason: PTO probe (RFC 9002 Sec. 6.2)
+
+  /**
+   * \brief TracedCallback signature for QUIC retransmission events.
+   *
+   * \param [in] packetCount Number of packets covered by this retransmission event.
+   * \param [in] bytes Bytes retransmitted (loss) or probed (PTO) in this event.
+   * \param [in] reason RETRANSMIT_LOSS or RETRANSMIT_PTO.
+   */
+  typedef void (*QuicRetransmitTracedCallback)(uint32_t packetCount, uint32_t bytes, uint8_t reason);
+
   bool IsServer(void) const { return m_isServer;}
 
   /**
@@ -986,6 +998,8 @@ protected:
 
   TracedCallback<Ptr<const Packet>, const QuicHeader&,
                  Ptr<const QuicSocketBase> > m_rxTrace; //!< Trace of received packets
+
+  TracedCallback<uint32_t, uint32_t, uint8_t> m_retransmitTrace; //!< Trace of retransmission events (loss- or PTO-triggered)
 
 };
 
