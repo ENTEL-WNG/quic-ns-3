@@ -393,6 +393,15 @@ public:
   uint32_t AvailableWindow () const;
 
   /**
+   * \brief Get the room left in the congestion window, ignoring flow control
+   *
+   * RFC 9002 B.2: bytes in flight are counted across all packet number spaces.
+   *
+   * \return the congestion window minus the bytes in flight, or 0
+   */
+  uint32_t CongestionWindowAvailable () const;
+
+  /**
    * \brief Public wrapper to notify acepted connections
    */
   void NotifyAppNewConnection (Ptr<Socket> socket, const Address& from) { NotifyNewConnectionCreated (socket, from); }
@@ -797,9 +806,12 @@ protected:
    * \param space the packet space number
    * \param maxSize the maximum data block to be transmitted (in bytes)
    * \param withAck forces an ACK to be sent
+   * \param isProbe whether this is a PTO probe, which RFC 9002 Section 7.5 exempts
+   *        from the congestion window
    * \returns the number of bytes sent
    */
-  uint32_t SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool withAck);
+  uint32_t SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool withAck,
+                           bool isProbe = false);
 
   /**
    * \brief Send a Connection Close frame

@@ -1202,7 +1202,8 @@ QuicSocketBase::SendAck (PacketNumberSpace space)
 }
 
 uint32_t
-QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool withAck)
+QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool withAck,
+                                bool isProbe)
 {
   if (m_drainingPeriodEvent.IsRunning ())
     {
@@ -1252,6 +1253,22 @@ QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool 
   Ptr<Packet> p;
   if (m_txBuffer->GetNumCryptoFramesInBuffer (space) > 0)
     {
+      // RFC 9002 Section 7: CRYPTO frames are sent whole, so the entire packet
+      // must fit in the congestion window unless it is a PTO probe
+      if (!isProbe)
+        {
+          uint32_t cryptoWireSize = m_txBuffer->PeekCryptoFrameSize (space) + totalOverhead;
+          if (space == INITIAL_DATA)
+            {
+              cryptoWireSize = std::max<uint32_t> (cryptoWireSize, MIN_INITIAL_PACKET_SIZE);
+            }
+          if (cryptoWireSize > CongestionWindowAvailable ())
+            {
+              NS_LOG_DEBUG ("CRYPTO packet of " << cryptoWireSize << " bytes blocked by the congestion window ("
+                            << CongestionWindowAvailable () << " bytes available)");
+              return 0;
+            }
+        }
       p = m_txBuffer->NextCryptoSequence (packetNumber, space);
       if (!p && space == APPLICATION_DATA) 
         p = m_txBuffer->NextSequence (payloadMaxSize, packetNumber, space);
@@ -1498,7 +1515,7 @@ QuicSocketBase::ReTxTimeout ()
       m_txBuffer->Add (ping, ptoSpace);
       
       // Force transmission of at least one packet bypassing window checks in SendPendingData
-      int32_t sentRaw = static_cast<int32_t> (SendDataPacket (ptoSpace, GetSegSize (), m_connected));
+      int32_t sentRaw = static_cast<int32_t> (SendDataPacket (ptoSpace, GetSegSize (), m_connected, true));
       uint32_t ptoProbeBytes = (sentRaw > 0) ? static_cast<uint32_t> (sentRaw) : 0;
       if (ptoProbeBytes > 0)
         {
@@ -1513,14 +1530,20 @@ QuicSocketBase::ReTxTimeout ()
 }
 
 uint32_t
-QuicSocketBase::AvailableWindow () const
+QuicSocketBase::CongestionWindowAvailable () const
 {
-  // 1. Congestion Window (Wire Bytes)
   // RFC 9002 B.2: bytes_in_flight spans all packet number spaces, so Initial
   // and Handshake packets occupy the same window as 1-RTT data
   uint32_t cwnd = m_tcb->m_cWnd.Get ();
   uint32_t wireBytesInFlight = m_txBuffer->BytesInFlight ();
-  uint32_t congestionAvail = (wireBytesInFlight >= cwnd) ? 0 : cwnd - wireBytesInFlight;
+  return (wireBytesInFlight >= cwnd) ? 0 : cwnd - wireBytesInFlight;
+}
+
+uint32_t
+QuicSocketBase::AvailableWindow () const
+{
+  // 1. Congestion Window (Wire Bytes)
+  uint32_t congestionAvail = CongestionWindowAvailable ();
 
   // 2. Flow Control Window (Payload Bytes Only)
   // m_delivered now tracks only STREAM payload bytes (after UpdateRateSample fix)

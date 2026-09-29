@@ -472,9 +472,17 @@ QuicTxBufferScheduledTestCase::TestStream0 ()
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 1200,
                         "TxBuf miscalculates size of in flight segments");
 
+  // Peeking reports the whole CRYPTO frame without dequeuing it
+  NS_TEST_ASSERT_MSG_EQ (txBuf.PeekCryptoFrameSize (APPLICATION_DATA), 1200,
+                         "Peek reports the wrong CRYPTO frame size");
+  NS_TEST_ASSERT_MSG_EQ (txBuf.GetNumCryptoFramesInBuffer (APPLICATION_DATA), 1,
+                         "Peek dequeued the CRYPTO frame");
+
   Ptr<Packet> ptx2 = txBuf.NextCryptoSequence (SequenceNumber32 (2), APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 2400,
                         "TxBuf miscalculates size of in flight segments");
+  NS_TEST_ASSERT_MSG_EQ (txBuf.PeekCryptoFrameSize (APPLICATION_DATA), 0,
+                         "Peek reports a CRYPTO frame in an empty queue");
 
   Ptr<Packet> ptx3 = txBuf.NextSequence (1200, SequenceNumber32 (3), APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 3600,

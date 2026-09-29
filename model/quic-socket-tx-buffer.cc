@@ -973,6 +973,15 @@ uint32_t QuicSocketTxBuffer::GetNumCryptoFramesInBuffer (PacketNumberSpace space
   return m_cryptoList[space].size ();
 }
 
+uint32_t QuicSocketTxBuffer::PeekCryptoFrameSize (PacketNumberSpace space) const
+{
+  if (m_cryptoList[space].empty ())
+    {
+      return 0;
+    }
+  return m_cryptoList[space].front ()->m_packet->GetSize ();
+}
+
 void QuicSocketTxBuffer::MarkInFlightDirty (PacketNumberSpace space)
 {
   m_inFlightDirty[space] = true;

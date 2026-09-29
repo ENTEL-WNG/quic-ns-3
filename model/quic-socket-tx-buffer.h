@@ -274,6 +274,17 @@ public:
   uint32_t GetNumCryptoFramesInBuffer (PacketNumberSpace space) const;
 
   /**
+   * \brief Size of the CRYPTO frame NextCryptoSequence() would send next
+   *
+   * CRYPTO frames are sent whole, so the caller needs this to check that the
+   * packet fits in the congestion window before dequeuing it.
+   *
+   * \param space the packet number space
+   * \return the frame size in bytes, or 0 if no CRYPTO frame is waiting
+   */
+  uint32_t PeekCryptoFrameSize (PacketNumberSpace space) const;
+
+  /**
    * Return the next CRYPTO frame to be sent
    * and add this packet to the sent list
    *
