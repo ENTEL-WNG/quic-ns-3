@@ -1051,7 +1051,7 @@ uint32_t QuicSocketTxBuffer::BytesInFlight () const
       inFlight += BytesInFlight (static_cast<PacketNumberSpace> (i));
     }
   NS_LOG_INFO (
-    "Compute total bytes in flight " << inFlight << " m_sentSize " << m_sentSize << " m_appSize " << m_cryptoSize + m_scheduler->AppSize ());
+    "Compute total bytes in flight " << inFlight << " m_sentSize " << m_sentSize << " m_appSize " << m_cryptoSize + (m_scheduler ? m_scheduler->AppSize () : 0));
   return inFlight;
 }
 

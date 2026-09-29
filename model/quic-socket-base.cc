@@ -1516,8 +1516,10 @@ uint32_t
 QuicSocketBase::AvailableWindow () const
 {
   // 1. Congestion Window (Wire Bytes)
+  // RFC 9002 B.2: bytes_in_flight spans all packet number spaces, so Initial
+  // and Handshake packets occupy the same window as 1-RTT data
   uint32_t cwnd = m_tcb->m_cWnd.Get ();
-  uint32_t wireBytesInFlight = m_txBuffer->GetCongestionControlledBytesInFlight ();
+  uint32_t wireBytesInFlight = m_txBuffer->BytesInFlight ();
   uint32_t congestionAvail = (wireBytesInFlight >= cwnd) ? 0 : cwnd - wireBytesInFlight;
 
   // 2. Flow Control Window (Payload Bytes Only)
