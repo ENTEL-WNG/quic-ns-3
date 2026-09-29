@@ -811,7 +811,7 @@ QuicTxBufferPureLogicTestCase::TestStreamAdd ()
  *
  * \brief Check that the memoized in-flight totals survive every kind of sent-list mutation
  *
- * BytesInFlight(), GetCongestionControlledBytesInFlight() and GetPayloadBytesInFlight() are
+ * BytesInFlight() and GetPayloadBytesInFlight() are
  * served from per-space totals that the send path maintains incrementally, so a mutation that
  * neither updates nor invalidates them would silently return a stale window. This walks a
  * buffer through send, wire-size revision, loss marking, acknowledgement, reset and discard,
@@ -883,9 +883,24 @@ QuicTxBufferInFlightCacheTestCase::DoRun ()
                              "Wrong payload bytes in flight after sending packet " << i);
     }
 
-  // Congestion control only accounts for APPLICATION_DATA, which is all we have sent.
-  NS_TEST_ASSERT_MSG_EQ (txBuf.GetCongestionControlledBytesInFlight (), 3600,
-                         "Congestion controlled bytes disagree with total wire bytes");
+  // RFC 9002 bytes_in_flight spans all packet number spaces: an Initial CRYPTO packet adds
+  // its wire bytes to the total but carries no STREAM payload.
+  Ptr<Packet> crypto = Create<Packet> (1196);
+  crypto->AddHeader (QuicSubheader::CreateCrypto (0, crypto->GetSize ()));
+  uint32_t cryptoSize = crypto->GetSize ();
+  txBuf.Add (crypto, INITIAL_DATA);
+  txBuf.NextCryptoSequence (SequenceNumber32 (0), INITIAL_DATA);
+  NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (INITIAL_DATA), cryptoSize,
+                         "Initial CRYPTO packet not counted in its own space");
+  NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (), 3600 + cryptoSize,
+                         "Initial CRYPTO packet not counted in total bytes in flight");
+  NS_TEST_ASSERT_MSG_EQ (txBuf.GetPayloadBytesInFlight (), 3 * 1196,
+                         "CRYPTO packet counted as STREAM payload");
+
+  // Discarding the Initial keys drops only that space's packets (RFC 9002 B.9).
+  txBuf.DiscardSpace (INITIAL_DATA);
+  NS_TEST_ASSERT_MSG_EQ (txBuf.BytesInFlight (), 3600,
+                         "Discarding the Initial space changed other spaces' bytes in flight");
 
   // Revising a packet's wire size (the header overhead is known only once it is serialised)
   // must resize the total in place rather than leave the old contribution behind.

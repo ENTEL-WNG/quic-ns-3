@@ -247,17 +247,13 @@ public:
   /**
    * \brief Return total bytes in flight (all retransmittable packets)
    *
+   * This is RFC 9002 bytes_in_flight: it spans every packet number space and
+   * is what the congestion window is checked against.
+   *
    * \returns total bytes in flight
    */
   uint32_t BytesInFlight () const;
   uint32_t BytesInFlight (PacketNumberSpace space) const;
-
-  /**
-   * \brief Return bytes in flight subject to congestion control (excluding Initial/Handshake)
-   *
-   * \returns congestion controlled bytes in flight
-   */
-  uint32_t GetCongestionControlledBytesInFlight () const;
 
   /**
     * \brief Return bytes in flight for Handshake/Initial packets

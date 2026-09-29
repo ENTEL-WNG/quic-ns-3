@@ -1070,15 +1070,6 @@ uint32_t QuicSocketTxBuffer::BytesInFlight (PacketNumberSpace space) const
   return m_inFlightWire[space];
 }
 
-uint32_t QuicSocketTxBuffer::GetCongestionControlledBytesInFlight () const
-{
-  NS_LOG_FUNCTION (this);
-  // RFC 9002: Congestion control applies to all packets, but often we only track ApplicationData
-  // for standard congestion control logic in simple implementations.
-  RefreshInFlight (APPLICATION_DATA);
-  return m_inFlightWire[APPLICATION_DATA];
-}
-
 uint32_t QuicSocketTxBuffer::GetHandshakeInFlight () const
 {
   NS_LOG_FUNCTION (this);
