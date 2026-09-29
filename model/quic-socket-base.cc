@@ -2273,8 +2273,7 @@ QuicSocketBase::OnReceivedAckFrame (QuicSubheader &sub, PacketNumberSpace space)
 
   // Generate RateSample
   struct RateSample * rs = m_txBuffer->GetRateSample ();
-  uint32_t previousWindow = BytesInFlight ();
-  rs->m_priorInFlight = m_tcb->m_bytesInFlight.Get ();
+  rs->m_priorInFlight = BytesInFlight ();
   m_tcb->m_priorInFlight = rs->m_priorInFlight;
 
   uint32_t lostOut = m_txBuffer->GetLost ();
@@ -2312,8 +2311,17 @@ QuicSocketBase::OnReceivedAckFrame (QuicSubheader &sub, PacketNumberSpace space)
         }
     }
 
-  // Count newly acked bytes
-  uint32_t ackedBytes = previousWindow - m_txBuffer->BytesInFlight ();
+  // Count newly acked bytes from the acked packets themselves: the drop in bytes
+  // in flight would also include packets just declared lost and, on the server,
+  // Handshake packets discarded above, neither of which was delivered (RFC 9002 B.9)
+  uint32_t ackedBytes = 0;
+  for (auto const& item : ackedPackets)
+    {
+      if (!item->m_lost)
+        {
+          ackedBytes += item->m_wireBytes > 0 ? item->m_wireBytes : item->m_packet->GetSize ();
+        }
+    }
 
   // Reset PTO count on successful ACK (RFC 9002 Section 6.2.1)
   if (!ackedPackets.empty ())
