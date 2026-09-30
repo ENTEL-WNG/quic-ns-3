@@ -245,6 +245,7 @@ class QuicSocketBase : public QuicSocket
 {
   friend class QuicSocketTxBuffer;
   friend class QuicMaxDataUpdateThresholdTestCase;
+  friend class QuicMaxDataRetryTimerTestCase;
 public:
   static const uint16_t MIN_INITIAL_PACKET_SIZE;
 
@@ -352,6 +353,26 @@ public:
    * application read, since that is what frees connection-level credit.
    */
   void MaybeSendMaxDataUpdate ();
+
+  /**
+   * \brief (Re)schedule the MAX_DATA safety-net retry timer. Called every
+   * time we send a MAX_DATA update: piggybacked MAX_DATA rides inside an
+   * ACK frame that is not itself tracked for loss detection (an ACK-only
+   * packet is never added to the sent-packet list, and a piggybacked ACK
+   * appended to a data packet is added to it *after* that packet's own
+   * entry was recorded), so if that specific packet is lost, nothing else
+   * would ever notice or resend it. This timer is the fallback.
+   */
+  void ArmMaxDataRetry ();
+
+  /**
+   * \brief Fired by the MAX_DATA retry timer: re-advertise our current
+   * local limit (in case the packet that last carried it was lost) and
+   * re-arm. Sending the same, already-advertised value again is harmless
+   * (RFC 9000 4.2 explicitly allows repeating MAX_DATA within a round
+   * trip) and is superseded the moment a real update is next due.
+   */
+  void MaxDataRetryExpired ();
 
   /**
    * \brief Return an object with the transport parameters of this socket
@@ -995,6 +1016,7 @@ protected:
   // Timers and Events
   EventId m_idleTimeoutEvent;                 //!< Event triggered upon receiving or sending a packet, when it expires the connection closes
   EventId m_drainingPeriodEvent;              //!< Event triggered upon idle timeout or immediate connection close, when it expires all closes
+  EventId m_maxDataRetryEvent;                 //!< Safety-net timer: re-advertises our last MAX_DATA value in case the packet that carried it (an ACK we piggybacked it on, which is not itself loss-tracked) was lost
   TracedValue<Time> m_drainingPeriodTimeout;  //!< Draining Period timeout
   bool m_flushOnClose;                        //!< Control behavior on connection close
   bool m_closeOnEmpty;                        //!< True if the socket will close after sending the buffered packets

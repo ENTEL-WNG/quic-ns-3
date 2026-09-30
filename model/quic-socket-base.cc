@@ -490,6 +490,7 @@ QuicSocketBase::QuicSocketBase (void)
     // Timers and Events
     m_idleTimeoutEvent (),
     m_drainingPeriodEvent (),
+    m_maxDataRetryEvent (),
     m_drainingPeriodTimeout (Seconds (90.0)),
     m_flushOnClose (false),
     m_closeOnEmpty (false),
@@ -571,6 +572,7 @@ QuicSocketBase::QuicSocketBase (const QuicSocketBase& sock)   // Copy constructo
     // Timers
     m_idleTimeoutEvent (),
     m_drainingPeriodEvent (),
+    m_maxDataRetryEvent (),
     m_drainingPeriodTimeout (sock.m_drainingPeriodTimeout),
     m_flushOnClose (sock.m_flushOnClose),
     m_closeOnEmpty (sock.m_closeOnEmpty),
@@ -668,6 +670,7 @@ QuicSocketBase::~QuicSocketBase (void)
     }
   m_quicl4 = 0;
   m_pacingTimer.Cancel ();
+  m_maxDataRetryEvent.Cancel ();
 }
 
 /* Inherit from Socket class: Bind socket to an end-point in QuicL4Protocol */
@@ -2250,6 +2253,35 @@ QuicSocketBase::SendStandaloneMaxDataUpdate (uint64_t newMaxData)
   frame->AddHeader (sub);
   m_localMaxData = static_cast<uint32_t> (newMaxData);
   m_quicl5->Send (frame);
+  ArmMaxDataRetry ();
+}
+
+void
+QuicSocketBase::ArmMaxDataRetry ()
+{
+  m_maxDataRetryEvent.Cancel ();
+
+  // A PTO-like delay: generous enough that a normal RTT's worth of ACKs
+  // (which would have confirmed or superseded this value) have had time to
+  // arrive, so we only fire when something actually looks lost.
+  Time rttBased = std::max (m_tcb->m_smoothedRtt, m_tcb->m_latestRtt) * 4;
+  Time floor = m_max_ack_delay * 4;
+  Time delay = std::max (rttBased, floor);
+
+  m_maxDataRetryEvent = Simulator::Schedule (delay, &QuicSocketBase::MaxDataRetryExpired, this);
+}
+
+void
+QuicSocketBase::MaxDataRetryExpired ()
+{
+  if (!m_handshakeConfirmed || m_socketState != OPEN)
+    {
+      return;
+    }
+
+  NS_LOG_INFO ("MAX_DATA retry timer expired: re-advertising " << m_localMaxData
+               << " in case the packet that last carried it was lost");
+  SendStandaloneMaxDataUpdate (m_localMaxData);
 }
 
 void
@@ -2333,9 +2365,12 @@ QuicSocketBase::OnSendingAckFrame (PacketNumberSpace space)
         {
           // Piggyback on the ACK we are already sending -- this is the
           // common case (something to ACK) and needs no packet of its own.
+          // That ACK is not itself tracked for loss detection (see
+          // ArmMaxDataRetry()'s comment), so arm the safety-net retry.
           QuicSubheader maxData = QuicSubheader::CreateMaxData (newMaxData);
           ackFrame->AddHeader (maxData);
           m_localMaxData = static_cast<uint32_t> (newMaxData);
+          ArmMaxDataRetry ();
 
           NS_LOG_INFO ("Sending MAX_DATA update: " << newMaxData);
         }
@@ -2687,6 +2722,7 @@ QuicSocketBase::DoClose (void)
       SetState (IDLE);
     }
 
+  m_maxDataRetryEvent.Cancel ();
   SetRecvCallback (MakeNullCallback<void, Ptr<Socket> > ());
   return m_quicl4->RemoveSocket (this);
 }

@@ -301,6 +301,70 @@ QuicMaxDataUpdateThresholdTestCase::DoTeardown (void)
   m_socket = nullptr;
 }
 
+/**
+ * Test Case: MAX_DATA Retry Timer Guards and Re-arming (RFC 9000 §4.2)
+ *
+ * A MAX_DATA update piggybacked on an ACK rides inside a packet that is not
+ * itself tracked for loss detection, so ArmMaxDataRetry() schedules a
+ * safety-net timer whenever we send one. This checks the timer's own
+ * bookkeeping -- arming and re-arming, and the guards in
+ * MaxDataRetryExpired() that must make it a safe no-op outside of the OPEN,
+ * handshake-confirmed state, since that path (SendStandaloneMaxDataUpdate())
+ * reaches into m_quicl5, which is unset on a bare, unconnected socket like
+ * the one used here.
+ */
+class QuicMaxDataRetryTimerTestCase : public TestCase
+{
+public:
+  QuicMaxDataRetryTimerTestCase ();
+
+private:
+  virtual void DoRun (void);
+  virtual void DoTeardown (void);
+
+  Ptr<QuicSocketBase> m_socket;
+};
+
+QuicMaxDataRetryTimerTestCase::QuicMaxDataRetryTimerTestCase ()
+  : TestCase ("MAX_DATA Retry Timer Guards and Re-arming (RFC 9000 §4.2)")
+{
+}
+
+void
+QuicMaxDataRetryTimerTestCase::DoRun (void)
+{
+  m_socket = CreateObject<QuicSocketBase> ();
+
+  m_socket->ArmMaxDataRetry ();
+  NS_TEST_ASSERT_MSG_EQ (m_socket->m_maxDataRetryEvent.IsRunning (), true,
+                         "ArmMaxDataRetry() should schedule the retry event");
+
+  // Re-arming must cancel and reschedule, not stack a second event.
+  m_socket->ArmMaxDataRetry ();
+  NS_TEST_ASSERT_MSG_EQ (m_socket->m_maxDataRetryEvent.IsRunning (), true,
+                         "Re-arming should still leave exactly one retry event scheduled");
+
+  // Before the handshake is confirmed, expiry must be a safe no-op: it must
+  // return before reaching SendStandaloneMaxDataUpdate(), which would
+  // otherwise dereference the unset m_quicl5 on this bare socket.
+  m_socket->m_handshakeConfirmed = false;
+  m_socket->m_socketState = QuicSocket::OPEN;
+  m_socket->MaxDataRetryExpired ();
+
+  // Likewise once the socket is no longer OPEN (e.g. closing), even with
+  // the handshake confirmed.
+  m_socket->m_handshakeConfirmed = true;
+  m_socket->m_socketState = QuicSocket::CLOSING;
+  m_socket->MaxDataRetryExpired ();
+}
+
+void
+QuicMaxDataRetryTimerTestCase::DoTeardown (void)
+{
+  m_socket->m_maxDataRetryEvent.Cancel ();
+  m_socket = nullptr;
+}
+
 } // namespace ns3
 
 /**
@@ -495,6 +559,7 @@ QuicFlowControlTestSuite::QuicFlowControlTestSuite ()
   AddTestCase (new QuicConnectionFlowControlTestCase, TestCase::QUICK);
   AddTestCase (new QuicMaxDataLocalPeerSeparationTestCase, TestCase::QUICK);
   AddTestCase (new QuicMaxDataUpdateThresholdTestCase, TestCase::QUICK);
+  AddTestCase (new QuicMaxDataRetryTimerTestCase, TestCase::QUICK);
   AddTestCase (new QuicFlowAndCongestionTestCase, TestCase::QUICK);
   AddTestCase (new QuicStreamWindowMonotonicityTestCase, TestCase::QUICK);
   AddTestCase (new QuicMultiStreamFlowControlTestCase, TestCase::QUICK);
