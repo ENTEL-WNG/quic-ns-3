@@ -161,27 +161,38 @@ public:
    * Add a packet to the tx buffer
    *
    * \param p a smart pointer to a packet
+   * \param space the packet number space
+   * \param urgent if true, jump the scheduling queue ahead of already-queued
+   *        data (used for PTO PING probes so they cannot be stranded behind
+   *        unrelated pending application data)
    * \return true if the insertion was successful
    */
-  bool Add (Ptr<Packet> p, PacketNumberSpace space = APPLICATION_DATA);
+  bool Add (Ptr<Packet> p, PacketNumberSpace space = APPLICATION_DATA, bool urgent = false);
 
   /**
    * \brief Request the next packet to transmit
    *
    * \param numBytes the number of bytes of the next packet to transmit requested
    * \param seq the sequence number of the next packet to transmit
+   * \param space the packet number space
+   * \param singleItem if true, stop after the first scheduled item instead of
+   *        bundling further pending data into the same packet (used for
+   *        PING-only PTO probes)
    * \return the next packet to transmit
    */
-  Ptr<Packet> NextSequence (uint32_t numBytes, const SequenceNumber32 seq, PacketNumberSpace space);
+  Ptr<Packet> NextSequence (uint32_t numBytes, const SequenceNumber32 seq, PacketNumberSpace space,
+                            bool singleItem = false);
 
   /**
    * \brief Get a block of data not transmitted yet and move it into SentList
    *
    * \param numBytes number of bytes of the QuicSocketTxItem requested
    * \param space the packet number space
+   * \param singleItem if true, stop after the first scheduled item instead of
+   *        bundling further pending data into the same packet
    * \return the item that contains the right packet
    */
-  Ptr<QuicSocketTxItem> GetNewSegment (uint32_t numBytes, PacketNumberSpace space);
+  Ptr<QuicSocketTxItem> GetNewSegment (uint32_t numBytes, PacketNumberSpace space, bool singleItem = false);
 
   /**
    * Process an acknowledgment, set the packets in the send buffer as acknowledged, mark
@@ -314,6 +325,20 @@ public:
    * \return the number of lost bytes
    */
   uint32_t Retransmission (SequenceNumber32 packetNumber, PacketNumberSpace space);
+
+  /**
+   * \brief Re-queue the oldest outstanding (sent, unacked, not yet lost) ack-eliciting
+   *        packet in a space for retransmission, without waiting for loss detection.
+   *
+   * Used by PTO probes configured to resend previously sent data (RFC 9002
+   * Section 6.2.4: "Previously sent data MAY be sent"). Internally marks the
+   * chosen packet lost and reuses Retransmission() to re-extract its frames.
+   *
+   * \param space the packet number space to search
+   * \return the number of bytes re-queued for retransmission, or 0 if the space
+   *         had no outstanding ack-eliciting packet to resend
+   */
+  uint32_t RetransmitOldestOutstanding (PacketNumberSpace space);
 
   /**
    * Set the TcpSocketState (tcb)

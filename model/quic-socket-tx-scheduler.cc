@@ -186,9 +186,9 @@ QuicSocketTxScheduler::AddScheduleItem (Ptr<QuicSocketTxScheduleItem> item, bool
 }
 
 Ptr<QuicSocketTxItem>
-QuicSocketTxScheduler::GetNewSegment (uint32_t numBytes)
+QuicSocketTxScheduler::GetNewSegment (uint32_t numBytes, bool singleItem)
 {
-  NS_LOG_FUNCTION (this << numBytes);
+  NS_LOG_FUNCTION (this << numBytes << singleItem);
 
   bool firstSegment = true;
   Ptr<Packet> currentPacket = 0;
@@ -221,6 +221,10 @@ QuicSocketTxScheduler::GetNewSegment (uint32_t numBytes)
           outItemSize += currentItem->m_packet->GetSize ();
 
           NS_LOG_LOGIC ("Updating application buffer size: " << m_appSize);
+          if (singleItem)
+            {
+              break; // caller wants exactly this one item, nothing bundled in
+            }
           continue;
         }
       else if (firstSegment)  // we cannot transmit a full packet, so let's split it and update the subheaders

@@ -278,7 +278,7 @@ QuicSocketTxBuffer::Print (std::ostream &os) const
      << m_cryptoSize;
 }
 
-bool QuicSocketTxBuffer::Add (Ptr<Packet> p, PacketNumberSpace space)
+bool QuicSocketTxBuffer::Add (Ptr<Packet> p, PacketNumberSpace space, bool urgent)
 {
   NS_LOG_FUNCTION (this << p << space);
 
@@ -320,7 +320,9 @@ bool QuicSocketTxBuffer::Add (Ptr<Packet> p, PacketNumberSpace space)
         }
       else
         {
-          m_scheduler->Add (item, false);
+          // Reuse the scheduler's retx=true path to jump the queue: it is not
+          // a real retransmission, but it gets the same "send first" priority.
+          m_scheduler->Add (item, urgent);
         }
 
       NS_LOG_INFO (
@@ -366,11 +368,12 @@ Ptr<Packet> QuicSocketTxBuffer::NextCryptoSequence (
 
 Ptr<Packet> QuicSocketTxBuffer::NextSequence (uint32_t numBytes,
                                               const SequenceNumber32 seq,
-                                              PacketNumberSpace space)
+                                              PacketNumberSpace space,
+                                              bool singleItem)
 {
-  NS_LOG_FUNCTION (this << numBytes << seq << space);
+  NS_LOG_FUNCTION (this << numBytes << seq << space << singleItem);
 
-  Ptr<QuicSocketTxItem> outItem = GetNewSegment (numBytes, space);
+  Ptr<QuicSocketTxItem> outItem = GetNewSegment (numBytes, space, singleItem);
 
   if (outItem)
     {
@@ -388,11 +391,11 @@ Ptr<Packet> QuicSocketTxBuffer::NextSequence (uint32_t numBytes,
 
 }
 
-Ptr<QuicSocketTxItem> QuicSocketTxBuffer::GetNewSegment (uint32_t numBytes, PacketNumberSpace space)
+Ptr<QuicSocketTxItem> QuicSocketTxBuffer::GetNewSegment (uint32_t numBytes, PacketNumberSpace space, bool singleItem)
 {
-  NS_LOG_FUNCTION (this << numBytes << space);
+  NS_LOG_FUNCTION (this << numBytes << space << singleItem);
 
-  Ptr<QuicSocketTxItem> outItem = m_scheduler->GetNewSegment (numBytes);
+  Ptr<QuicSocketTxItem> outItem = m_scheduler->GetNewSegment (numBytes, singleItem);
 
   if (outItem->m_packet->GetSize () > 0)
     {
@@ -832,12 +835,30 @@ uint32_t QuicSocketTxBuffer::Retransmission (SequenceNumber32 packetNumber, Pack
           sent_it++;
         }
     }
-  NS_LOG_INFO ("Retransmission() complete. m_sentSize=" << m_sentSize 
-               << " AppSize=" << AppSize() 
-               << " m_cryptoSize=" << m_cryptoSize 
+  NS_LOG_INFO ("Retransmission() complete. m_sentSize=" << m_sentSize
+               << " AppSize=" << AppSize()
+               << " m_cryptoSize=" << m_cryptoSize
                << " toRetx=" << toRetx);
-  
+
   return toRetx;
+}
+
+uint32_t QuicSocketTxBuffer::RetransmitOldestOutstanding (PacketNumberSpace space)
+{
+  NS_LOG_FUNCTION (this << space);
+
+  // m_sentList is ordered ascending by packet number, so the first
+  // not-yet-lost, ack-eliciting entry is the oldest outstanding one.
+  for (auto &item : m_sentList[space])
+    {
+      if (!item->m_lost && (item->m_isStream || item->m_isCrypto))
+        {
+          item->m_lost = true;
+          break;
+        }
+    }
+
+  return Retransmission (SequenceNumber32 (0), space);
 }
 
 std::vector<Ptr<QuicSocketTxItem> > QuicSocketTxBuffer::DetectLostPackets (Ptr<TcpSocketState> tcb, PacketNumberSpace space)

@@ -167,6 +167,16 @@ QuicSocketBase::GetTypeId (void)
                    UintegerValue (2),
                    MakeUintegerAccessor (&QuicSocketBase::m_kMaxPacketsReceivedBeforeAckSend),
                    MakeUintegerChecker<uint32_t> ())
+    .AddAttribute ("PtoProbeMode",
+                   "What a PTO probe carries (RFC 9002 Sec. 6.2.4 permits all three): "
+                   "NewData sends fresh, never-before-sent data (the RFC's SHOULD default), "
+                   "Retransmit resends the oldest outstanding previously sent data, "
+                   "PingOnly always sends a bare PING and never bundles data",
+                   EnumValue (QuicSocketBase::PTO_PROBE_NEW_DATA),
+                   MakeEnumAccessor<QuicSocketBase::PtoProbeMode> (&QuicSocketBase::m_ptoProbeMode),
+                   MakeEnumChecker (QuicSocketBase::PTO_PROBE_NEW_DATA, "NewData",
+                                    QuicSocketBase::PTO_PROBE_RETRANSMIT, "Retransmit",
+                                    QuicSocketBase::PTO_PROBE_PING_ONLY, "PingOnly"))
     .AddAttribute ("FlushOnClose", "Determines the connection close behavior",
                    BooleanValue (true),
                    MakeBooleanAccessor (&QuicSocketBase::m_flushOnClose),
@@ -485,6 +495,8 @@ QuicSocketBase::QuicSocketBase (void)
     m_maxTrackedGaps (20),
     // Local ACK-generation policy
     m_kMaxPacketsReceivedBeforeAckSend (2),
+    // Local PTO probe content policy
+    m_ptoProbeMode (PTO_PROBE_NEW_DATA),
     // Transport Parameters management
     m_receivedTransportParameters (false),
     // Timers and Events
@@ -567,6 +579,8 @@ QuicSocketBase::QuicSocketBase (const QuicSocketBase& sock)   // Copy constructo
     m_maxTrackedGaps (sock.m_maxTrackedGaps),
     // Local ACK-generation policy
     m_kMaxPacketsReceivedBeforeAckSend (sock.m_kMaxPacketsReceivedBeforeAckSend),
+    // Local PTO probe content policy
+    m_ptoProbeMode (sock.m_ptoProbeMode),
     // Transport Params Management
     m_receivedTransportParameters (sock.m_receivedTransportParameters),
     // Timers
@@ -1217,7 +1231,7 @@ QuicSocketBase::SendAck (PacketNumberSpace space)
 
 uint32_t
 QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool withAck,
-                                bool isProbe)
+                                bool isProbe, bool singleFrameOnly)
 {
   if (m_drainingPeriodEvent.IsRunning ())
     {
@@ -1284,12 +1298,12 @@ QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool 
             }
         }
       p = m_txBuffer->NextCryptoSequence (packetNumber, space);
-      if (!p && space == APPLICATION_DATA) 
-        p = m_txBuffer->NextSequence (payloadMaxSize, packetNumber, space);
+      if (!p && space == APPLICATION_DATA)
+        p = m_txBuffer->NextSequence (payloadMaxSize, packetNumber, space, singleFrameOnly);
     }
   else
     {
-      p = m_txBuffer->NextSequence (payloadMaxSize, packetNumber, space);
+      p = m_txBuffer->NextSequence (payloadMaxSize, packetNumber, space, singleFrameOnly);
     }
 
   // 5. ABORT CHECKS (GUARDS)
@@ -1521,24 +1535,46 @@ QuicSocketBase::ReTxTimeout ()
            else ptoSpace = HANDSHAKE_DATA;
         }
 
-      // Send a PING frame to ensure ack-eliciting
-      Ptr<Packet> ping = Create<Packet> ();
-      QuicSubheader sub;
-      sub.SetPing ();
-      ping->AddHeader (sub);
-      m_txBuffer->Add (ping, ptoSpace);
-      
-      // Force transmission of at least one packet bypassing window checks in SendPendingData
-      int32_t sentRaw = static_cast<int32_t> (SendDataPacket (ptoSpace, GetSegSize (), m_connected, true));
-      uint32_t ptoProbeBytes = (sentRaw > 0) ? static_cast<uint32_t> (sentRaw) : 0;
-      if (ptoProbeBytes > 0)
+      // RFC 9002 Sec. 6.2.4 permits a PTO probe to carry a bare PING,
+      // retransmitted (previously sent) data, or new data; m_ptoProbeMode picks.
+      uint32_t retransmittedBytes = 0;
+      bool needPing = true;
+      if (m_ptoProbeMode == PTO_PROBE_RETRANSMIT)
         {
-          m_retransmitTrace (1, ptoProbeBytes, RETRANSMIT_PTO);
+          retransmittedBytes = m_txBuffer->RetransmitOldestOutstanding (ptoSpace);
+          needPing = (retransmittedBytes == 0); // nothing outstanding to resend: fall back to a bare PING
         }
 
-      // Also try to send one more if possible (up to 2 packets); this may send
-      // fresh app data rather than a retransmission, so it is not traced here
-      SendPendingData (m_connected);
+      if (needPing)
+        {
+          // Send a PING frame to ensure ack-eliciting. Queued urgent so it
+          // cannot be stranded behind unrelated pending data.
+          Ptr<Packet> ping = Create<Packet> ();
+          QuicSubheader sub;
+          sub.SetPing ();
+          ping->AddHeader (sub);
+          m_txBuffer->Add (ping, ptoSpace, true);
+        }
+
+      // In PING_ONLY mode the probe must carry only the frame just queued above
+      // (or the retransmitted one), never bundle in other pending STREAM data.
+      bool singleFrameOnly = (m_ptoProbeMode == PTO_PROBE_PING_ONLY);
+
+      // Force transmission of at least one packet bypassing window checks in SendPendingData
+      int32_t sentRaw = static_cast<int32_t> (SendDataPacket (ptoSpace, GetSegSize (), m_connected, true, singleFrameOnly));
+      uint32_t ptoProbeBytes = (sentRaw > 0) ? static_cast<uint32_t> (sentRaw) : 0;
+      if (ptoProbeBytes > 0 || retransmittedBytes > 0)
+        {
+          m_retransmitTrace (1, std::max (ptoProbeBytes, retransmittedBytes), RETRANSMIT_PTO);
+        }
+
+      // Also try to send one more if possible (up to 2 packets, RFC 9002 6.2.4); this
+      // may send fresh app data rather than a retransmission, so it is not traced here.
+      // Skipped in PING_ONLY mode so a second probe can't smuggle in extra data.
+      if (!singleFrameOnly)
+        {
+          SendPendingData (m_connected);
+        }
     }
   SetReTxTimeout ();
 }

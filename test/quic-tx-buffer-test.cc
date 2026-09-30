@@ -56,6 +56,7 @@ private:
   void TestSetLoss ();
   void TestAddBlocks ();
   void TestStream0 ();
+  void TestPtoProbeContent ();
 };
 
 QuicTxBufferScheduledTestCase::QuicTxBufferScheduledTestCase () :
@@ -76,6 +77,7 @@ QuicTxBufferScheduledTestCase::DoRun ()
   Simulator::Schedule (Seconds (0.0), &QuicTxBufferScheduledTestCase::TestSetLoss, this);
   Simulator::Schedule (Seconds (0.0), &QuicTxBufferScheduledTestCase::TestAddBlocks, this);
   Simulator::Schedule (Seconds (0.0), &QuicTxBufferScheduledTestCase::TestStream0, this);
+  Simulator::Schedule (Seconds (0.0), &QuicTxBufferScheduledTestCase::TestPtoProbeContent, this);
   Simulator::Run ();
   Simulator::Destroy ();
 }
@@ -509,6 +511,108 @@ QuicTxBufferScheduledTestCase::TestStream0 ()
                                                             gaps, APPLICATION_DATA);
   NS_TEST_ASSERT_MSG_EQ(txBuf.BytesInFlight (), 1200,
                         "TxBuf miscalculates size of in flight segments");
+}
+
+void
+QuicTxBufferScheduledTestCase::TestPtoProbeContent ()
+{
+  // An urgent Add() (used to queue a PTO PING) must be scheduled ahead of
+  // older, already-pending regular data, and singleItem=true on NextSequence
+  // must stop it from being bundled with anything else in the same packet
+  // (RFC 9002 Sec. 6.2.4 PTO_PROBE_PING_ONLY support).
+  {
+    QuicSocketTxBuffer txBuf;
+    Ptr<QuicSocketTxScheduler> sched = CreateObject<QuicSocketTxScheduler> ();
+    txBuf.SetScheduler (sched);
+    Ptr<QuicSocketBase> socket = CreateObject<QuicSocketBase> ();
+    txBuf.SetSocket (socket);
+    Ptr<QuicSocketState> tcbd = CreateObject<QuicSocketState> ();
+    txBuf.SetQuicSocketState (tcbd);
+
+    // Older, regular (non-urgent) pending STREAM data
+    Ptr<Packet> streamData = Create<Packet> (100);
+    QuicSubheader streamSub = QuicSubheader::CreateStreamSubHeader (1, 0, 100, false, true, false);
+    streamData->AddHeader (streamSub);
+    txBuf.Add (streamData);
+
+    // A PING queued afterwards, but marked urgent
+    Ptr<Packet> ping = Create<Packet> ();
+    QuicSubheader pingSub;
+    pingSub.SetPing ();
+    ping->AddHeader (pingSub);
+    txBuf.Add (ping, APPLICATION_DATA, true);
+
+    Ptr<Packet> ptx = txBuf.NextSequence (1200, SequenceNumber32 (1), APPLICATION_DATA, true);
+    QuicSubheader outSub;
+    ptx->PeekHeader (outSub);
+    NS_TEST_ASSERT_MSG_EQ (outSub.IsPing (), true,
+                           "Urgent PING should be scheduled ahead of older pending data");
+    NS_TEST_ASSERT_MSG_EQ (txBuf.AppSize (), streamData->GetSize (),
+                           "singleItem should leave the older STREAM data queued, not bundle it in");
+  }
+
+  // singleItem must cap the packet to exactly one scheduled item even when
+  // there is room for more.
+  {
+    QuicSocketTxBuffer txBuf;
+    Ptr<QuicSocketTxScheduler> sched = CreateObject<QuicSocketTxScheduler> ();
+    txBuf.SetScheduler (sched);
+    Ptr<QuicSocketBase> socket = CreateObject<QuicSocketBase> ();
+    txBuf.SetSocket (socket);
+    Ptr<QuicSocketState> tcbd = CreateObject<QuicSocketState> ();
+    txBuf.SetQuicSocketState (tcbd);
+
+    Ptr<Packet> p1 = Create<Packet> (50);
+    QuicSubheader sub1 = QuicSubheader::CreateStreamSubHeader (1, 0, 50, false, true, false);
+    p1->AddHeader (sub1);
+    txBuf.Add (p1);
+
+    Ptr<Packet> p2 = Create<Packet> (50);
+    QuicSubheader sub2 = QuicSubheader::CreateStreamSubHeader (2, 0, 50, false, true, false);
+    p2->AddHeader (sub2);
+    txBuf.Add (p2);
+
+    uint32_t bothItemsSize = p1->GetSize () + p2->GetSize ();
+
+    Ptr<Packet> ptx = txBuf.NextSequence (bothItemsSize, SequenceNumber32 (1), APPLICATION_DATA, true);
+    NS_TEST_ASSERT_MSG_EQ (ptx->GetSize (), p1->GetSize (),
+                           "singleItem must not bundle a second pending item into the same packet");
+    NS_TEST_ASSERT_MSG_EQ (txBuf.AppSize (), p2->GetSize (),
+                           "the second item must remain queued for a later packet");
+  }
+
+  // RetransmitOldestOutstanding() re-queues the oldest outstanding ack-eliciting
+  // packet in a space without needing loss detection to run first (used for
+  // PTO_PROBE_RETRANSMIT: "Previously sent data MAY be sent", RFC 9002 Sec. 6.2.4).
+  {
+    QuicSocketTxBuffer txBuf;
+    Ptr<QuicSocketTxScheduler> sched = CreateObject<QuicSocketTxScheduler> ();
+    txBuf.SetScheduler (sched);
+    Ptr<QuicSocketBase> socket = CreateObject<QuicSocketBase> ();
+    txBuf.SetSocket (socket);
+    Ptr<QuicSocketState> tcbd = CreateObject<QuicSocketState> ();
+    txBuf.SetQuicSocketState (tcbd);
+
+    NS_TEST_ASSERT_MSG_EQ (txBuf.RetransmitOldestOutstanding (APPLICATION_DATA), 0,
+                           "Nothing outstanding means nothing to retransmit");
+
+    Ptr<Packet> p1 = Create<Packet> (100);
+    QuicSubheader sub1 = QuicSubheader::CreateStreamSubHeader (5, 0, 100, false, true, false);
+    p1->AddHeader (sub1);
+    txBuf.Add (p1);
+    Ptr<Packet> ptx1 = txBuf.NextSequence (200, SequenceNumber32 (1), APPLICATION_DATA);
+    uint32_t sentSize = ptx1->GetSize ();
+    NS_TEST_ASSERT_MSG_EQ (txBuf.AppSize (), 0, "Nothing should be pending right after it was sent");
+
+    uint32_t retx = txBuf.RetransmitOldestOutstanding (APPLICATION_DATA);
+    NS_TEST_ASSERT_MSG_EQ (retx, sentSize,
+                           "Should requeue exactly the bytes of the outstanding STREAM frame");
+    NS_TEST_ASSERT_MSG_EQ (txBuf.AppSize (), sentSize,
+                           "Retransmitted data should be back in the application queue");
+
+    NS_TEST_ASSERT_MSG_EQ (txBuf.RetransmitOldestOutstanding (APPLICATION_DATA), 0,
+                           "The original packet was evicted on retransmission, so it cannot be picked again");
+  }
 }
 
 /**

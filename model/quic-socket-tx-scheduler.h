@@ -151,9 +151,11 @@ public:
    * \brief Get the next scheduled packet with a specified size
    *
    * \param numBytes number of bytes of the QuicSocketTxItem requested
+   * \param singleItem if true, stop after the first scheduled item instead of
+   *        bundling further pending items into the same packet
    * \return the item that contains the right packet
    */
-  Ptr<QuicSocketTxItem> GetNewSegment (uint32_t numBytes);
+  Ptr<QuicSocketTxItem> GetNewSegment (uint32_t numBytes, bool singleItem = false);
 
   /**
    * Returns the total number of bytes in the application buffer

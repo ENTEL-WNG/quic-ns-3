@@ -806,6 +806,19 @@ public:
   static constexpr uint8_t RETRANSMIT_PTO  = 1; //!< Retransmit trace reason: PTO probe (RFC 9002 Sec. 6.2)
 
   /**
+   * \brief Content a PTO probe carries, per RFC 9002 Section 6.2.4. All three
+   *        are explicitly permitted by the RFC; it recommends PTO_PROBE_NEW_DATA
+   *        as the default ("An endpoint SHOULD include new data in packets that
+   *        are sent on PTO expiration").
+   */
+  enum PtoProbeMode
+    {
+      PTO_PROBE_NEW_DATA   = 0, //!< Prefer fresh, never-before-sent data (RFC 9002 6.2.4 SHOULD default)
+      PTO_PROBE_RETRANSMIT = 1, //!< Resend the oldest outstanding previously sent data ("Previously sent data MAY be sent")
+      PTO_PROBE_PING_ONLY  = 2  //!< Always send a bare PING, never bundling data ("the sender SHOULD send a PING or other ack-eliciting frame")
+    };
+
+  /**
    * \brief TracedCallback signature for QUIC retransmission events.
    *
    * \param [in] packetCount Number of packets covered by this retransmission event.
@@ -871,10 +884,13 @@ protected:
    * \param withAck forces an ACK to be sent
    * \param isProbe whether this is a PTO probe, which RFC 9002 Section 7.5 exempts
    *        from the congestion window
+   * \param singleFrameOnly if true, do not bundle any further pending data beyond
+   *        the single frame at the head of the scheduling queue (used for PTO
+   *        probes configured to send a bare PING, see PtoProbeMode)
    * \returns the number of bytes sent
    */
   uint32_t SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool withAck,
-                           bool isProbe = false);
+                           bool isProbe = false, bool singleFrameOnly = false);
 
   /**
    * \brief Send a Connection Close frame
@@ -1009,6 +1025,9 @@ protected:
 
   // Local ACK-generation policy (RFC 9000 13.2.2); not negotiated with the peer
   uint32_t m_kMaxPacketsReceivedBeforeAckSend;  //!< Send an ACK after this many received ack-eliciting packets, even if the delayed-ack timer has not fired yet
+
+  // Local PTO probe content policy (RFC 9002 6.2.4); not negotiated with the peer
+  PtoProbeMode m_ptoProbeMode;  //!< What a PTO probe carries: new data, retransmitted data, or a bare PING
 
   // Transport Parameters management
   bool m_receivedTransportParameters;      //!< Check if Transport Parameters are already been received
