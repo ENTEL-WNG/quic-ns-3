@@ -477,7 +477,7 @@ uint64_t
 QuicL5Protocol::GetMaxData ()
 {
   NS_LOG_FUNCTION (this);
-  return m_socket->GetConnectionMaxData ();
+  return m_socket->GetPeerMaxData ();
 }
 
 const std::vector<Ptr<QuicStreamBase> >&

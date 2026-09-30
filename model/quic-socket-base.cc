@@ -109,10 +109,12 @@ QuicSocketBase::GetTypeId (void)
                    UintegerValue (4294967295),
                    MakeUintegerAccessor (&QuicSocketBase::m_initial_max_stream_data),
                    MakeUintegerChecker<uint32_t> ())
-    .AddAttribute ("MaxData",
-                   "Connection Maximum Data",
-                   UintegerValue (4294967295),
-                   MakeUintegerAccessor (&QuicSocketBase::m_max_data),
+    .AddAttribute ("InitialMaxData",
+                   "Our initial connection-level flow-control limit (the initial_max_data "
+                   "transport parameter): the amount of data we allow the peer to send us "
+                   "on this connection before we send any MAX_DATA update",
+                   UintegerValue (UINT32_MAX / 2),
+                   MakeUintegerAccessor (&QuicSocketBase::m_localMaxData),
                    MakeUintegerChecker<uint32_t> ())
     .AddAttribute ("MaxStreamIdBidi",
                    "Maximum StreamId for Bidirectional Streams",
@@ -464,7 +466,8 @@ QuicSocketBase::QuicSocketBase (void)
     m_lastReceived (Seconds (0)),
     // Transport Parameters values
     m_initial_max_stream_data (0),
-    m_max_data (0),
+    m_localMaxData (0),
+    m_peerMaxData (UINT32_MAX),
     m_initial_max_stream_id_bidi (0),
     m_idleTimeout (Seconds (300.0)),
     m_ack_delay_exponent (3),
@@ -545,7 +548,8 @@ QuicSocketBase::QuicSocketBase (const QuicSocketBase& sock)   // Copy constructo
     m_lastReceived (sock.m_lastReceived),
     // Transport Params
     m_initial_max_stream_data (sock.m_initial_max_stream_data),
-    m_max_data (sock.m_max_data),
+    m_localMaxData (sock.m_localMaxData),
+    m_peerMaxData (sock.m_peerMaxData),
     m_initial_max_stream_id_bidi (sock.m_initial_max_stream_id_bidi),
     m_idleTimeout (sock.m_idleTimeout),
     m_ack_delay_exponent (sock.m_ack_delay_exponent),
@@ -1551,9 +1555,9 @@ QuicSocketBase::AvailableWindow () const
   uint64_t totalPayloadSent = m_tcb->m_delivered + unackedPayload;
   
   uint32_t flowControlAvail = 0;
-  if (m_max_data > totalPayloadSent)
+  if (m_peerMaxData > totalPayloadSent)
     {
-      flowControlAvail = m_max_data - totalPayloadSent;
+      flowControlAvail = m_peerMaxData - totalPayloadSent;
     }
 
   NS_LOG_DEBUG ("Congestion avail: " << congestionAvail 
@@ -2114,7 +2118,7 @@ QuicSocketBase::OnReceivedFrame (Ptr<Packet> p, QuicSubheader &sub, PacketNumber
       // set the maximum amount of data that can be sent
       // on this connection
       NS_LOG_INFO ("Received MAX_DATA frame");
-      SetConnectionMaxData (sub.GetMaxData ());
+      SetPeerMaxData (sub.GetMaxData ());
     }
   else if (sub.GetFrameType () == QuicSubheader::MAX_STREAMS_BIDI)
     {
@@ -2257,7 +2261,11 @@ QuicSocketBase::OnSendingAckFrame (PacketNumberSpace space)
           QuicSubheader maxData = QuicSubheader::CreateMaxData (newMaxData);
           ackFrame->AddHeader (maxData);
           m_lastMaxData = 0;
-          
+          // Our own local limit must reflect what we just told the peer,
+          // otherwise CheckIfPacketOverflowMaxDataLimit() keeps rejecting
+          // incoming data against the stale (initial) value.
+          m_localMaxData = static_cast<uint32_t> (newMaxData);
+
           NS_LOG_INFO ("Sending MAX_DATA update: " << newMaxData);
         }
     }
@@ -2456,7 +2464,7 @@ QuicSocketBase::OnSendingTransportParameters ()
 
   QuicTransportParameters transportParameters;
   transportParameters = transportParameters.CreateTransportParameters (
-    m_initial_max_stream_data, m_max_data, m_initial_max_stream_id_bidi,
+    m_initial_max_stream_data, m_localMaxData, m_initial_max_stream_id_bidi,
     (uint32_t) m_idleTimeout.Get ().GetSeconds (),
     m_tcb->m_segmentSize,
     m_ack_delay_exponent, (uint16_t) m_max_ack_delay.GetMilliSeconds (),
@@ -2502,15 +2510,17 @@ QuicSocketBase::OnReceivedTransportParameters (
     }
 
   NS_LOG_DEBUG (
-    "Before applying received transport parameters " << " m_initial_max_stream_data " << m_initial_max_stream_data << " m_max_data " << m_max_data << " m_initial_max_stream_id_bidi " << m_initial_max_stream_id_bidi << " m_idleTimeout " << m_idleTimeout << " m_tcb->m_segmentSize " << m_tcb->m_segmentSize << " m_ack_delay_exponent " << m_ack_delay_exponent << " m_initial_max_stream_id_uni " << m_initial_max_stream_id_uni);
+    "Before applying received transport parameters " << " m_initial_max_stream_data " << m_initial_max_stream_data << " m_localMaxData " << m_localMaxData << " m_peerMaxData " << m_peerMaxData << " m_initial_max_stream_id_bidi " << m_initial_max_stream_id_bidi << " m_idleTimeout " << m_idleTimeout << " m_tcb->m_segmentSize " << m_tcb->m_segmentSize << " m_ack_delay_exponent " << m_ack_delay_exponent << " m_initial_max_stream_id_uni " << m_initial_max_stream_id_uni);
 
   m_initial_max_stream_data = std::min (
     transportParameters.GetInitialMaxStreamData (),
     m_initial_max_stream_data);
   m_quicl5->UpdateInitialMaxStreamData (m_initial_max_stream_data);
 
-  m_max_data = std::min (transportParameters.GetInitialMaxData (),
-                         m_max_data);
+  // The peer's initial_max_data is *its* connection flow-control limit for
+  // us, i.e. the amount it is granting us to send -- not something to be
+  // reconciled with our own (local) limit, which governs the other direction.
+  m_peerMaxData = transportParameters.GetInitialMaxData ();
 
   m_initial_max_stream_id_bidi = std::min (
     transportParameters.GetInitialMaxStreamIdBidi (),
@@ -2535,7 +2545,7 @@ QuicSocketBase::OnReceivedTransportParameters (
     m_initial_max_stream_id_uni);
 
   NS_LOG_DEBUG (
-    "After applying received transport parameters " << " m_initial_max_stream_data " << m_initial_max_stream_data << " m_max_data " << m_max_data << " m_initial_max_stream_id_bidi " << m_initial_max_stream_id_bidi << " m_idleTimeout " << m_idleTimeout << " m_tcb->m_segmentSize " << m_tcb->m_segmentSize << " m_ack_delay_exponent " << m_ack_delay_exponent << " m_initial_max_stream_id_uni " << m_initial_max_stream_id_uni);
+    "After applying received transport parameters " << " m_initial_max_stream_data " << m_initial_max_stream_data << " m_localMaxData " << m_localMaxData << " m_peerMaxData " << m_peerMaxData << " m_initial_max_stream_id_bidi " << m_initial_max_stream_id_bidi << " m_idleTimeout " << m_idleTimeout << " m_tcb->m_segmentSize " << m_tcb->m_segmentSize << " m_ack_delay_exponent " << m_ack_delay_exponent << " m_initial_max_stream_id_uni " << m_initial_max_stream_id_uni);
 }
 
 int
@@ -2880,18 +2890,24 @@ QuicSocketBase::GetInitialMaxStreamData () const
 }
 
 uint32_t
-QuicSocketBase::GetConnectionMaxData () const
+QuicSocketBase::GetLocalMaxData () const
 {
-  return m_max_data;
+  return m_localMaxData;
+}
+
+uint32_t
+QuicSocketBase::GetPeerMaxData () const
+{
+  return m_peerMaxData;
 }
 
 void
-QuicSocketBase::SetConnectionMaxData (uint32_t maxData)
+QuicSocketBase::SetPeerMaxData (uint32_t maxData)
 {
   // Only allow increases, never decreases (RFC 9000 compliance)
-  if (maxData > m_max_data)
+  if (maxData > m_peerMaxData)
     {
-      m_max_data = maxData;
+      m_peerMaxData = maxData;
       // Flush buffered data now that the window has opened.
       SendPendingData (m_connected);
 
@@ -2902,7 +2918,7 @@ QuicSocketBase::SetConnectionMaxData (uint32_t maxData)
     }
   else
     {
-      NS_LOG_INFO ("Ignoring MAX_DATA " << maxData << " (not greater than current " << m_max_data << ")");
+      NS_LOG_INFO ("Ignoring MAX_DATA " << maxData << " (not greater than current " << m_peerMaxData << ")");
     }
 }
 
@@ -3045,7 +3061,7 @@ QuicSocketBase::CheckIfPacketOverflowMaxDataLimit (
         }
     }
 
-  if ((m_max_data < m_rxBuffer->Size () + validPacketSize))
+  if ((m_localMaxData < m_rxBuffer->Size () + validPacketSize))
     {
       return true;
     }

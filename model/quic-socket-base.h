@@ -414,18 +414,28 @@ public:
   uint32_t BytesInFlight () const;
 
   /**
-   * \brief Get the maximum amount of data that can be sent on the connection
+   * \brief Get our own connection-level flow-control limit, i.e. the most data
+   * we have told (or will tell) the peer it is allowed to send us
    *
-   * \return the maximum amount of data that can be sent on the connection
+   * \return our local connection flow-control limit
    */
-  uint32_t GetConnectionMaxData () const;
+  uint32_t GetLocalMaxData () const;
 
   /**
-   * \brief Set the maximum amount of data that can be sent on the connection
+   * \brief Get the peer's connection-level flow-control limit, i.e. the most
+   * data we are currently allowed to send it
    *
-   * \param maxData the maximum amount of data that can be sent on the connection
+   * \return the peer's connection flow-control limit
    */
-  void SetConnectionMaxData (uint32_t maxData);
+  uint32_t GetPeerMaxData () const;
+
+  /**
+   * \brief Update the peer's connection-level flow-control limit, as learned
+   * from its transport parameters or a received MAX_DATA frame
+   *
+   * \param maxData the peer's new connection flow-control limit
+   */
+  void SetPeerMaxData (uint32_t maxData);
 
   /**
    * \brief Get the maximum amount of data per stream
@@ -935,7 +945,8 @@ protected:
 
   // Transport Parameters values
   uint32_t m_initial_max_stream_data;    //!< The initial value for the maximum data that can be sent on any newly created stream
-  uint32_t m_max_data;                   //!< The maximum amount of data that can be sent on the connection
+  uint32_t m_localMaxData;               //!< Our own connection-level flow-control limit: the most we've told (or will tell) the peer it may send us
+  uint32_t m_peerMaxData;                //!< The peer's connection-level flow-control limit: the most we are allowed to send it
   uint32_t m_initial_max_stream_id_bidi; //!< The the initial maximum number of application-owned bidirectional streams the peer may initiate
   TracedValue<Time> m_idleTimeout;       //!< The idle timeout value in seconds
   uint8_t m_ack_delay_exponent;          //!< The exponent used to decode the ack delay field in the ACK frame

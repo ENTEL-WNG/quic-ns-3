@@ -121,7 +121,7 @@ QuicConnectionFlowControlTestCase::DoRun (void)
 
   // Test 1: Connection max data can be set
   uint32_t connectionMaxData = 1000000;
-  m_socket->SetConnectionMaxData (connectionMaxData);
+  m_socket->SetPeerMaxData (connectionMaxData);
 
   // Test 2: Initial congestion window is reasonable
   Ptr<QuicSocketState> tcb = m_socket->GetTcb ();
@@ -139,6 +139,87 @@ QuicConnectionFlowControlTestCase::DoRun (void)
 
 void
 QuicConnectionFlowControlTestCase::DoTeardown (void)
+{
+  m_socket = nullptr;
+}
+
+/**
+ * Test Case: Local vs. Peer Connection-Level MAX_DATA Are Independent
+ *
+ * RFC 9000 Section 4.1 makes connection flow control symmetric per direction:
+ * each endpoint independently limits how much data its peer may send it, via
+ * its own initial_max_data / MAX_DATA frames. That local, receive-side limit
+ * must not be conflated with the limit the *peer* has granted *us* to send,
+ * which governs the opposite direction:
+ * - Learning the peer's limit (a received MAX_DATA frame) must not change
+ *   what we have told the peer it may send us.
+ * - Raising our own local (receive-side) limit must not, by itself, permit
+ *   us to send more -- only the peer's MAX_DATA can do that.
+ * - Incoming-data flow-control enforcement (CheckIfPacketOverflowMaxDataLimit)
+ *   must be governed by our own local limit, not by whatever the peer has
+ *   granted us to send.
+ */
+class QuicMaxDataLocalPeerSeparationTestCase : public TestCase
+{
+public:
+  QuicMaxDataLocalPeerSeparationTestCase ();
+
+private:
+  virtual void DoRun (void);
+  virtual void DoTeardown (void);
+
+  Ptr<QuicSocketBase> m_socket;
+};
+
+QuicMaxDataLocalPeerSeparationTestCase::QuicMaxDataLocalPeerSeparationTestCase ()
+  : TestCase ("Local vs. Peer Connection MAX_DATA Are Independent (RFC 9000 §4.1)")
+{
+}
+
+void
+QuicMaxDataLocalPeerSeparationTestCase::DoRun (void)
+{
+  m_socket = CreateObject<QuicSocketBase> ();
+  m_socket->SetAttribute ("InitialMaxData", UintegerValue (500));
+
+  NS_TEST_ASSERT_MSG_EQ (m_socket->GetLocalMaxData (), 500,
+                         "Local limit should start at the InitialMaxData attribute");
+
+  // The peer's limit is not governed by our InitialMaxData attribute at all:
+  // it defaults independently (fully permissive, until constrained by the
+  // peer's own transport parameters or MAX_DATA frames).
+  NS_TEST_ASSERT_MSG_EQ (m_socket->GetPeerMaxData (), UINT32_MAX,
+                         "Peer limit must default independently of our own InitialMaxData attribute");
+
+  // A MAX_DATA frame may only ever raise the peer limit (RFC 9000 §4.1): a
+  // value at or below the current one must be ignored, and in neither case
+  // may it leak into our own advertised receive limit.
+  m_socket->SetPeerMaxData (2000);
+  NS_TEST_ASSERT_MSG_EQ (m_socket->GetPeerMaxData (), UINT32_MAX,
+                         "A MAX_DATA frame below the current peer limit must be ignored");
+  NS_TEST_ASSERT_MSG_EQ (m_socket->GetLocalMaxData (), 500,
+                         "A received MAX_DATA frame must not affect our own local limit");
+
+  // A 600-byte STREAM frame overflows our 500-byte local limit even though
+  // the peer has granted us far more (2000) to send -- the two must not be
+  // conflated by the incoming-data check.
+  Ptr<Packet> p = Create<Packet> (600);
+  QuicSubheader sub = QuicSubheader::CreateStreamSubHeader (4, 0, p->GetSize (), false, true, false);
+  std::vector<std::pair<Ptr<Packet>, QuicSubheader> > disgregated;
+  disgregated.push_back (std::make_pair (p, sub));
+
+  NS_TEST_ASSERT_MSG_EQ (m_socket->CheckIfPacketOverflowMaxDataLimit (disgregated), true,
+                         "600 bytes of STREAM data must overflow a 500-byte local limit");
+
+  // Raising our own local limit (as if we had sent a MAX_DATA update) lifts
+  // the incoming-data check, independently of the peer's limit.
+  m_socket->SetAttribute ("InitialMaxData", UintegerValue (1000));
+  NS_TEST_ASSERT_MSG_EQ (m_socket->CheckIfPacketOverflowMaxDataLimit (disgregated), false,
+                         "600 bytes of STREAM data must fit under a 1000-byte local limit");
+}
+
+void
+QuicMaxDataLocalPeerSeparationTestCase::DoTeardown (void)
 {
   m_socket = nullptr;
 }
@@ -333,6 +414,7 @@ QuicFlowControlTestSuite::QuicFlowControlTestSuite ()
 {
   AddTestCase (new QuicStreamFlowControlTestCase, TestCase::QUICK);
   AddTestCase (new QuicConnectionFlowControlTestCase, TestCase::QUICK);
+  AddTestCase (new QuicMaxDataLocalPeerSeparationTestCase, TestCase::QUICK);
   AddTestCase (new QuicFlowAndCongestionTestCase, TestCase::QUICK);
   AddTestCase (new QuicStreamWindowMonotonicityTestCase, TestCase::QUICK);
   AddTestCase (new QuicMultiStreamFlowControlTestCase, TestCase::QUICK);
