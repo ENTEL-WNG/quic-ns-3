@@ -244,6 +244,7 @@ public:
 class QuicSocketBase : public QuicSocket
 {
   friend class QuicSocketTxBuffer;
+  friend class QuicMaxDataUpdateThresholdTestCase;
 public:
   static const uint16_t MIN_INITIAL_PACKET_SIZE;
 
@@ -320,6 +321,37 @@ public:
    * \return the generated ACK frame
    */
   Ptr<Packet> OnSendingAckFrame (PacketNumberSpace space);
+
+  /**
+   * \brief Check whether enough connection-level receive credit has been
+   * freed since our last advertised MAX_DATA to be worth telling the peer
+   * about (RFC 9000 4.2): the freed amount must reach
+   * MaxDataUpdateFraction of the receive window, or \p force may be set to
+   * bypass that threshold (e.g. on a received DATA_BLOCKED).
+   *
+   * \param newMaxData set to the candidate value to advertise, if due
+   * \param force bypass the update-fraction threshold
+   * \return true if \p newMaxData should be sent
+   */
+  bool MaxDataUpdateDue (uint64_t &newMaxData, bool force) const;
+
+  /**
+   * \brief Send a connection-level MAX_DATA update on its own, outside of
+   * any ACK we are already building, and update our local limit to match.
+   * Used when there is nothing else about to go out that could carry it
+   * (e.g. right after an application read, or on a received DATA_BLOCKED),
+   * so that a blocked sender is never left waiting on us.
+   *
+   * \param newMaxData the value to advertise
+   */
+  void SendStandaloneMaxDataUpdate (uint64_t newMaxData);
+
+  /**
+   * \brief Check whether a MAX_DATA update is due, and if there is no ACK
+   * already scheduled to carry it, send it standalone. Called after every
+   * application read, since that is what frees connection-level credit.
+   */
+  void MaybeSendMaxDataUpdate ();
 
   /**
    * \brief Return an object with the transport parameters of this socket
@@ -972,8 +1004,7 @@ protected:
   Ptr<TcpCongestionOps> m_congestionControl;      //!< Congestion control
   TracedValue<Time> m_lastRtt;                    //!< Latest measured RTT
   bool m_quicCongestionControlLegacy;             //!< Quic Congestion control if true, TCP Congestion control if false
-  uint32_t m_lastMaxData;                         //!< Last MaxData ACK
-  uint32_t m_maxDataInterval;                     //!< Interval between successive MaxData frames in ACKs
+  double m_maxDataUpdateFraction;                 //!< Fraction of the receive window that must be freed before a MAX_DATA update is due (RFC 9000 4.2)
 
   uint32_t m_initialPacketSize; //!< size of the first packet to be sent durin the handshake (at least 1200 bytes, per RFC)
 

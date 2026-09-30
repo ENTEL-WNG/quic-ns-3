@@ -116,6 +116,15 @@ QuicSocketBase::GetTypeId (void)
                    UintegerValue (UINT32_MAX / 2),
                    MakeUintegerAccessor (&QuicSocketBase::m_localMaxData),
                    MakeUintegerChecker<uint32_t> ())
+    .AddAttribute ("MaxDataUpdateFraction",
+                   "Fraction of the receive window (SocketRcvBufSize) that must be freed "
+                   "since our last advertised MAX_DATA before we send another update "
+                   "(RFC 9000 4.2). Lower values update more often with smaller "
+                   "increments; 1.0 is the least frequent setting that still avoids "
+                   "stalling the sender.",
+                   DoubleValue (0.5),
+                   MakeDoubleAccessor (&QuicSocketBase::m_maxDataUpdateFraction),
+                   MakeDoubleChecker<double> (0.0, 1.0))
     .AddAttribute ("MaxStreamIdBidi",
                    "Maximum StreamId for Bidirectional Streams",
                    UintegerValue (5),
@@ -489,8 +498,7 @@ QuicSocketBase::QuicSocketBase (void)
     m_congestionControl (CreateObject<QuicCongestionOps> ()),
     m_lastRtt (Seconds (0.0)),
     m_quicCongestionControlLegacy (false),
-    m_lastMaxData (0),
-    m_maxDataInterval (10),
+    m_maxDataUpdateFraction (0.5),
     m_initialPacketSize (1200),
     m_pacingTimer (Timer::REMOVE_ON_DESTROY)
 {
@@ -571,8 +579,7 @@ QuicSocketBase::QuicSocketBase (const QuicSocketBase& sock)   // Copy constructo
     m_congestionControl (nullptr),
     m_lastRtt (sock.m_lastRtt),
     m_quicCongestionControlLegacy (sock.m_quicCongestionControlLegacy),
-    m_lastMaxData (0),
-    m_maxDataInterval (10),
+    m_maxDataUpdateFraction (sock.m_maxDataUpdateFraction),
     m_initialPacketSize (sock.m_initialPacketSize),
     m_pacingTimer (Timer::REMOVE_ON_DESTROY)
 {
@@ -1607,6 +1614,7 @@ QuicSocketBase::Recv (uint32_t maxSize, uint32_t flags)
   if (outPacket)
     {
       m_bytesRead += outPacket->GetSize ();
+      MaybeSendMaxDataUpdate ();
     }
   return outPacket;
 }
@@ -1623,6 +1631,7 @@ QuicSocketBase::RecvFrom (uint32_t maxSize, uint32_t flags,
   if (packet && packet->GetSize () != 0)
     {
       m_bytesRead += packet->GetSize ();
+      MaybeSendMaxDataUpdate ();
       if (m_endPoint)
         {
           fromAddress = InetSocketAddress (m_endPoint->GetPeerAddress (), m_endPoint->GetPeerPort ());
@@ -2138,7 +2147,16 @@ QuicSocketBase::OnReceivedFrame (Ptr<Packet> p, QuicSubheader &sub, PacketNumber
   else if (sub.GetFrameType () == QuicSubheader::DATA_BLOCKED)
     {
       NS_LOG_INFO ("Received DATA_BLOCKED frame at offset " << sub.GetOffset ());
-      // RFC 9000 Section 19.12: Informational only, could trigger an increase in MAX_DATA
+      // RFC 9000 4.2: a receiver MUST NOT wait for DATA_BLOCKED before
+      // sending MAX_DATA, but if the sender is already blocked and we do
+      // have unadvertised credit, there is no reason to wait any longer
+      // either -- send it now, regardless of the usual update threshold or
+      // of any ACK we may already have scheduled.
+      uint64_t newMaxData;
+      if (MaxDataUpdateDue (newMaxData, true))
+        {
+          SendStandaloneMaxDataUpdate (newMaxData);
+        }
     }
   else if (sub.GetFrameType () == QuicSubheader::STREAMS_BLOCKED_BIDI || sub.GetFrameType () == QuicSubheader::STREAMS_BLOCKED_UNI)
     {
@@ -2197,6 +2215,67 @@ QuicSocketBase::OnReceivedFrame (Ptr<Packet> p, QuicSubheader &sub, PacketNumber
 
 }
 
+bool
+QuicSocketBase::MaxDataUpdateDue (uint64_t &newMaxData, bool force) const
+{
+  if (!m_handshakeConfirmed)
+    {
+      return false;
+    }
+
+  // Candidate = total bytes the application has consumed so far + however
+  // much more we are willing to buffer on top of that.
+  newMaxData = m_bytesRead + GetSocketRcvBufSize ();
+  if (newMaxData <= m_localMaxData)
+    {
+      return false;
+    }
+
+  if (force)
+    {
+      return true;
+    }
+
+  uint64_t freed = newMaxData - m_localMaxData;
+  uint64_t threshold = static_cast<uint64_t> (m_maxDataUpdateFraction * GetSocketRcvBufSize ());
+  return freed >= threshold;
+}
+
+void
+QuicSocketBase::SendStandaloneMaxDataUpdate (uint64_t newMaxData)
+{
+  NS_LOG_INFO ("Sending standalone MAX_DATA update: " << newMaxData);
+  QuicSubheader sub = QuicSubheader::CreateMaxData (newMaxData);
+  Ptr<Packet> frame = Create<Packet> (0);
+  frame->AddHeader (sub);
+  m_localMaxData = static_cast<uint32_t> (newMaxData);
+  m_quicl5->Send (frame);
+}
+
+void
+QuicSocketBase::MaybeSendMaxDataUpdate ()
+{
+  uint64_t newMaxData;
+  if (!MaxDataUpdateDue (newMaxData, false))
+    {
+      return;
+    }
+
+  // If an ACK is already scheduled (immediate or delayed), let
+  // OnSendingAckFrame() piggyback the update on that packet -- sending one
+  // now too would just be a second packet moments later.
+  QuicPacketNumberSpace &pnSpace = m_pnSpaces[APPLICATION_DATA];
+  if (pnSpace.m_sendAckEvent.IsRunning () || pnSpace.m_delAckEvent.IsRunning ())
+    {
+      return;
+    }
+
+  // Nothing else is about to go out that could carry this update -- most
+  // notably, this is the case RFC 9000 4.2 warns about: a receiver must not
+  // wait on the sender to notice it is blocked before granting more credit.
+  SendStandaloneMaxDataUpdate (newMaxData);
+}
+
 Ptr<Packet>
 QuicSocketBase::OnSendingAckFrame (PacketNumberSpace space)
 {
@@ -2249,21 +2328,13 @@ QuicSocketBase::OnSendingAckFrame (PacketNumberSpace space)
 
   if (space == APPLICATION_DATA && m_handshakeConfirmed)
     {
-      if (m_lastMaxData < m_maxDataInterval)
+      uint64_t newMaxData;
+      if (MaxDataUpdateDue (newMaxData, false))
         {
-          m_lastMaxData++;
-        }
-      else
-        {
-          // New Max Data = Total Bytes Read by App + RX Buffer Capacity
-          uint64_t newMaxData = m_bytesRead + GetSocketRcvBufSize ();
-
+          // Piggyback on the ACK we are already sending -- this is the
+          // common case (something to ACK) and needs no packet of its own.
           QuicSubheader maxData = QuicSubheader::CreateMaxData (newMaxData);
           ackFrame->AddHeader (maxData);
-          m_lastMaxData = 0;
-          // Our own local limit must reflect what we just told the peer,
-          // otherwise CheckIfPacketOverflowMaxDataLimit() keeps rejecting
-          // incoming data against the stale (initial) value.
           m_localMaxData = static_cast<uint32_t> (newMaxData);
 
           NS_LOG_INFO ("Sending MAX_DATA update: " << newMaxData);

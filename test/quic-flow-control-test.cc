@@ -225,6 +225,85 @@ QuicMaxDataLocalPeerSeparationTestCase::DoTeardown (void)
 }
 
 /**
+ * Test Case: MAX_DATA Update Threshold (RFC 9000 §4.2)
+ *
+ * MaxDataUpdateDue() decides whether enough connection-level receive credit
+ * has been freed since our last advertised MAX_DATA to be worth telling the
+ * peer about: an update is due once the freed amount reaches
+ * MaxDataUpdateFraction of the receive window, or unconditionally when
+ * \p force is set (used on a received DATA_BLOCKED, where RFC 9000 §4.2
+ * says the receiver must not make the sender wait).
+ */
+// In the ns3 namespace (rather than relying on the file's "using namespace
+// ns3;") so that QuicSocketBase's "friend class QuicMaxDataUpdateThresholdTestCase;"
+// (an unqualified name, which binds within ns3) actually names this class.
+namespace ns3 {
+
+class QuicMaxDataUpdateThresholdTestCase : public TestCase
+{
+public:
+  QuicMaxDataUpdateThresholdTestCase ();
+
+private:
+  virtual void DoRun (void);
+  virtual void DoTeardown (void);
+
+  Ptr<QuicSocketBase> m_socket;
+};
+
+QuicMaxDataUpdateThresholdTestCase::QuicMaxDataUpdateThresholdTestCase ()
+  : TestCase ("MAX_DATA Update Threshold (RFC 9000 §4.2)")
+{
+}
+
+void
+QuicMaxDataUpdateThresholdTestCase::DoRun (void)
+{
+  m_socket = CreateObject<QuicSocketBase> ();
+  m_socket->SetAttribute ("SocketRcvBufSize", UintegerValue (1000));
+  m_socket->SetAttribute ("InitialMaxData", UintegerValue (1000));
+  m_socket->SetAttribute ("MaxDataUpdateFraction", DoubleValue (0.5));
+  m_socket->m_handshakeConfirmed = true;
+
+  uint64_t candidate = 0;
+
+  // Nothing read yet: no credit has been freed beyond the initial window.
+  NS_TEST_ASSERT_MSG_EQ (m_socket->MaxDataUpdateDue (candidate, false), false,
+                         "No update should be due before any data has been read");
+
+  // Below the 50% threshold (500 bytes of a 1000-byte window): still not due.
+  m_socket->m_bytesRead = 400;
+  NS_TEST_ASSERT_MSG_EQ (m_socket->MaxDataUpdateDue (candidate, false), false,
+                         "Freeing 400 of 1000 bytes (40%) must not reach a 50% threshold");
+
+  // A forced check (as on DATA_BLOCKED) must still fire even below threshold,
+  // as long as there is any unadvertised credit at all.
+  NS_TEST_ASSERT_MSG_EQ (m_socket->MaxDataUpdateDue (candidate, true), true,
+                         "A forced check must be due whenever any credit is unadvertised");
+  NS_TEST_ASSERT_MSG_EQ (candidate, 1400u, "Candidate should be bytesRead + rcvBufSize");
+
+  // At or above the 50% threshold: due even without forcing.
+  m_socket->m_bytesRead = 500;
+  NS_TEST_ASSERT_MSG_EQ (m_socket->MaxDataUpdateDue (candidate, false), true,
+                         "Freeing exactly 50% of the window must be due");
+  NS_TEST_ASSERT_MSG_EQ (candidate, 1500u, "Candidate should be bytesRead + rcvBufSize");
+
+  // Once we "send" that update (as OnSendingAckFrame would), the local limit
+  // catches up and no further update is due until more credit frees up.
+  m_socket->m_localMaxData = static_cast<uint32_t> (candidate);
+  NS_TEST_ASSERT_MSG_EQ (m_socket->MaxDataUpdateDue (candidate, false), false,
+                         "No update should be due right after advertising the current candidate");
+}
+
+void
+QuicMaxDataUpdateThresholdTestCase::DoTeardown (void)
+{
+  m_socket = nullptr;
+}
+
+} // namespace ns3
+
+/**
  * Test Case 3: Flow Control and Congestion Control Interaction
  *
  * RFC 9000 & RFC 9002:
@@ -415,6 +494,7 @@ QuicFlowControlTestSuite::QuicFlowControlTestSuite ()
   AddTestCase (new QuicStreamFlowControlTestCase, TestCase::QUICK);
   AddTestCase (new QuicConnectionFlowControlTestCase, TestCase::QUICK);
   AddTestCase (new QuicMaxDataLocalPeerSeparationTestCase, TestCase::QUICK);
+  AddTestCase (new QuicMaxDataUpdateThresholdTestCase, TestCase::QUICK);
   AddTestCase (new QuicFlowAndCongestionTestCase, TestCase::QUICK);
   AddTestCase (new QuicStreamWindowMonotonicityTestCase, TestCase::QUICK);
   AddTestCase (new QuicMultiStreamFlowControlTestCase, TestCase::QUICK);
