@@ -33,6 +33,7 @@
 // #include "ns3/ipv6-l3-protocol.h"
 // #include "ns3/ipv6-routing-protocol.h"
 #include <algorithm>
+#include <vector>
 #include "quic-stream-rx-buffer.h"
 #include "quic-subheader.h"
 
@@ -106,49 +107,26 @@ QuicStreamRxBuffer::Add (Ptr<Packet> p, const QuicSubheader& sub)
       if (p->GetSize () > 0)
         {
 
-          QuicStreamRxItem *item = new QuicStreamRxItem ();
-          item->m_packet = p->Copy ();
-          item->m_offset = sub.GetOffset ();
-          item->m_fin = sub.IsStreamFin ();
-
-          QuicStreamRxPacketList::iterator it;
-
           // FIN packet for the stream
           if (sub.IsStreamFin ())
             {
               NS_LOG_LOGIC ("FIN packet for the stream");
               m_finalSize = sub.GetOffset () + p->GetSize ();
               m_recvFin = true;
-              m_streamRecvList.insert (m_streamRecvList.end (), item);
-              m_numBytesInBuffer += p->GetSize ();
-              return true;
+            }
+          else if (m_streamRecvList.find (sub.GetOffset ()) != m_streamRecvList.end ())
+            {
+              // Duplicate packet
+              NS_LOG_WARN ("Discarded duplicate packet.");
+              return false;
             }
 
-          // Find the right place to insert packet (TODO: binary search would be more efficient)
-          bool inserted = false;
-          for (it = m_streamRecvList.begin (); it < m_streamRecvList.end ();
-               ++it)
-            {
-              if (item->m_offset == (*it)->m_offset)
-                {
-                  // Duplicate packet
-                  NS_LOG_WARN ("Discarded duplicate packet.");
-                  return false;
-                }
-              if (item->m_offset < (*it)->m_offset)
-                {
-                  m_streamRecvList.insert (it, item);
-                  NS_LOG_LOGIC ("Inserted packet");
-                  inserted = true;
-                  break;
-                }
-            }
-          // The packet is not in the buffer, append it to the end
-          if (!inserted)
-            {
-              NS_LOG_LOGIC ("Appending packet");
-              m_streamRecvList.insert (m_streamRecvList.end (), item);
-            }
+          QuicStreamRxItem item;
+          item.m_packet = p->Copy ();
+          item.m_offset = sub.GetOffset ();
+          item.m_fin = sub.IsStreamFin ();
+          m_streamRecvList.emplace (item.m_offset, item);
+          NS_LOG_LOGIC ("Inserted packet");
           m_numBytesInBuffer += p->GetSize ();
           NS_LOG_INFO ("Update: Received Size = " << m_numBytesInBuffer);
           return true;
@@ -180,32 +158,41 @@ QuicStreamRxBuffer::Extract (uint32_t maxSize)
       return outPkt;
     }
 
+  std::vector<Ptr<Packet> > parts;
   QuicStreamRxPacketList::iterator it = m_streamRecvList.begin ();
 
-  while (extractSize > 0 && !m_streamRecvList.empty ()
-         && it != m_streamRecvList.end ())
+  while (extractSize > 0 && it != m_streamRecvList.end ()
+         && it->second.m_packet->GetSize () <= extractSize)
     {
-      it = m_streamRecvList.begin ();
-      Ptr<Packet> currentPacket = (*it)->m_packet;
+      parts.push_back (it->second.m_packet);
+      NS_LOG_LOGIC ("Extracted and removed packet " << it->first << " from RxBuffer, bytes to extract: " << extractSize);
 
-      if (currentPacket->GetSize () <= extractSize)   // Merge
+      m_numBytesInBuffer -= parts.back ()->GetSize ();
+      extractSize -= parts.back ()->GetSize ();
+      it = m_streamRecvList.erase (it);
+    }
+
+  // Packet::AddAtEnd reallocates and copies the whole packet whenever it runs
+  // out of room, so appending the parts one by one onto a growing packet copies
+  // O(N^2) bytes. Merging adjacent pairs in rounds copies O(N log N) bytes and
+  // yields the same packet. The parts are owned here, so changing them is safe.
+  for (size_t count = parts.size (); count > 1; count = (count + 1) / 2)
+    {
+      for (size_t i = 0; i < count; i += 2)
         {
-          uint64_t offset = (*it)->m_offset;
-          outPkt->AddAtEnd (currentPacket);
-          m_streamRecvList.erase (it);
-          NS_LOG_LOGIC ("Extracted and removed packet " << offset << " from RxBuffer, bytes to extract: " << extractSize);
-
-          m_numBytesInBuffer -= currentPacket->GetSize ();
-          extractSize -= currentPacket->GetSize ();
-
-          continue;
+          Ptr<Packet> merged = parts[i];
+          if (i + 1 < count)
+            {
+              merged->AddAtEnd (parts[i + 1]);
+              parts[i + 1] = nullptr;
+            }
+          parts[i / 2] = merged;
         }
-      else
-        {
-          break;
-        }
+    }
 
-      it++;
+  if (!parts.empty ())
+    {
+      outPkt->AddAtEnd (parts.front ());
     }
 
   if (outPkt->GetSize () == 0)
@@ -226,16 +213,18 @@ QuicStreamRxBuffer::GetDeliverable (uint64_t currRecvOffset)
 
   // First, purge any stale items that are entirely below currRecvOffset
   // (already-delivered retransmissions that were buffered out-of-order).
+  // Stored packets are never empty, so an item at or above currRecvOffset cannot
+  // be stale, and the list is ordered by offset: the walk can stop at the first one.
   QuicStreamRxPacketList::iterator i = m_streamRecvList.begin ();
-  while (i != m_streamRecvList.end ())
+  while (i != m_streamRecvList.end () && i->first < currRecvOffset)
     {
-      uint64_t itemEnd = (*i)->m_offset + (*i)->m_packet->GetSize ();
+      uint64_t itemEnd = i->first + i->second.m_packet->GetSize ();
       if (itemEnd <= currRecvOffset)
         {
           // Entirely stale - remove it
-          NS_LOG_LOGIC ("Purging stale buffered packet at offset " << (*i)->m_offset
+          NS_LOG_LOGIC ("Purging stale buffered packet at offset " << i->first
                         << " (already consumed up to " << currRecvOffset << ")");
-          m_numBytesInBuffer -= (*i)->m_packet->GetSize ();
+          m_numBytesInBuffer -= i->second.m_packet->GetSize ();
           i = m_streamRecvList.erase (i);
         }
       else
@@ -244,14 +233,16 @@ QuicStreamRxBuffer::GetDeliverable (uint64_t currRecvOffset)
         }
     }
 
-  for (i = m_streamRecvList.begin (); i != m_streamRecvList.end (); ++i)
+  // Stop only past the expected offset, not at the first mismatch: an item below
+  // it (a duplicate FIN, or a frame overlapping the run) must not end the run.
+  for (; i != m_streamRecvList.end () && i->first <= currRecvOffset + lengthToExtract; ++i)
     {
-      if ((*i)->m_offset == currRecvOffset + lengthToExtract)
+      if (i->first == currRecvOffset + lengthToExtract)
         {
-          offsetToExtract = (*i)->m_offset;
-          lengthToExtract += (*i)->m_packet->GetSize ();
+          offsetToExtract = i->first;
+          lengthToExtract += i->second.m_packet->GetSize ();
         }
-      NS_LOG_LOGIC ("Inspected packet with offset " << (*i)->m_offset);
+      NS_LOG_LOGIC ("Inspected packet with offset " << i->first);
     }
 
   return std::make_pair (offsetToExtract, lengthToExtract);
@@ -305,7 +296,7 @@ QuicStreamRxBuffer::Print (std::ostream & os) const
 
   for (it = m_streamRecvList.begin (); it != m_streamRecvList.end (); ++it)
     {
-      (*it)->Print (ss);
+      it->second.Print (ss);
     }
 
   os << "Stream Recv list: \n" << ss.str () << "\n\nCurrent Status: "

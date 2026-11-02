@@ -166,8 +166,12 @@ public:
   uint32_t Size (void) const;
 
 private:
-  // TODO consider replacing std::vector with a ordered data structure
-  typedef std::vector<QuicStreamRxItem*> QuicStreamRxPacketList;  //!< container for data stored in the buffer
+  /**
+   * Container for data stored in the buffer, ordered by stream offset. It is a
+   * multimap because Add () does not check FIN frames for duplicates, so a
+   * retransmitted FIN is held alongside the original, after it.
+   */
+  typedef std::multimap<uint64_t, QuicStreamRxItem> QuicStreamRxPacketList;
 
   QuicStreamRxPacketList m_streamRecvList;  //!< List of received packets with additional info
   uint32_t m_numBytesInBuffer;              //!< Current buffer occupancy
