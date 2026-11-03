@@ -246,6 +246,7 @@ class QuicSocketBase : public QuicSocket
   friend class QuicSocketTxBuffer;
   friend class QuicMaxDataUpdateThresholdTestCase;
   friend class QuicMaxDataRetryTimerTestCase;
+  friend class QuicAckPiggybackTestCase;
 public:
   static const uint16_t MIN_INITIAL_PACKET_SIZE;
 
@@ -881,7 +882,7 @@ protected:
    *
    * \param space the packet space number
    * \param maxSize the maximum data block to be transmitted (in bytes)
-   * \param withAck forces an ACK to be sent
+   * \param withAck allows an ACK frame to be attached, if one is owed in this space
    * \param isProbe whether this is a PTO probe, which RFC 9002 Section 7.5 exempts
    *        from the congestion window
    * \param singleFrameOnly if true, do not bundle any further pending data beyond
@@ -904,7 +905,7 @@ protected:
   /**
    * \brief Send as much pending data as possible according to the Tx window.
    *
-   * \param withAck forces an ACK to be sent
+   * \param withAck allows ACK frames to be attached, if one is owed
    * \return the number of packets sent
    */
   uint32_t SendPendingData (bool withAck = false);
@@ -955,6 +956,22 @@ protected:
    * \return true if the recevied packet is out of order
    */
   bool IsOutOfOrder (PacketNumberSpace space, SequenceNumber32 packetNumber);
+
+  /**
+   * \brief Check if an ACK is owed, i.e. an ack-eliciting packet has arrived
+   * since the last ACK was sent
+   *
+   * \param space the packet number space to check
+   * \return true if an immediate or delayed ACK is scheduled in that space
+   */
+  bool IsAckPending (PacketNumberSpace space) const;
+
+  /**
+   * \brief Mark the owed ACK as sent: cancel its timers and reset the counters
+   *
+   * \param space the packet number space to clear
+   */
+  void ClearPendingAck (PacketNumberSpace space);
 
   /**
    * \brief Send an ACK packet

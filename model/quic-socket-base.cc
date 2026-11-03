@@ -1177,16 +1177,30 @@ QuicSocketBase::IsOutOfOrder (PacketNumberSpace space, SequenceNumber32 packetNu
   return false;
 }
 
+bool
+QuicSocketBase::IsAckPending (PacketNumberSpace space) const
+{
+  const QuicPacketNumberSpace &pnSpace = m_pnSpaces[space];
+  return pnSpace.m_sendAckEvent.IsRunning () || pnSpace.m_delAckEvent.IsRunning ();
+}
+
+void
+QuicSocketBase::ClearPendingAck (PacketNumberSpace space)
+{
+  QuicPacketNumberSpace &pnSpace = m_pnSpaces[space];
+  pnSpace.m_delAckEvent.Cancel ();
+  pnSpace.m_sendAckEvent.Cancel ();
+  pnSpace.m_queue_ack = false;
+  pnSpace.m_numPacketsReceivedSinceLastAckSent = 0;
+}
+
 void
 QuicSocketBase::SendAck (PacketNumberSpace space)
 {
   NS_LOG_FUNCTION (this << space);
   QuicPacketNumberSpace &pnSpace = m_pnSpaces[space];
-  
-  pnSpace.m_delAckEvent.Cancel ();
-  pnSpace.m_sendAckEvent.Cancel ();
-  pnSpace.m_queue_ack = false;
-  pnSpace.m_numPacketsReceivedSinceLastAckSent = 0;
+
+  ClearPendingAck (space);
 
   if (pnSpace.m_receivedPacketNumbers.empty ())
     {
@@ -1267,7 +1281,9 @@ QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool 
   
   Ptr<Packet> ackFrame = nullptr;
   uint32_t ackOverhead = 0;
-  if (withAck && !m_pnSpaces[space].m_receivedPacketNumbers.empty ())
+  // Only piggyback an ACK that is owed: repeating one that acknowledges nothing
+  // new costs payload, and its ACK Delay grows with the time since the last reception
+  if (withAck && IsAckPending (space) && !m_pnSpaces[space].m_receivedPacketNumbers.empty ())
     {
       ackFrame = OnSendingAckFrame (space);
       ackOverhead = ackFrame->GetSize ();
@@ -1314,13 +1330,19 @@ QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool 
 
   uint32_t sz = p->GetSize ();
   
-  if (sz == 0 && !withAck && space == APPLICATION_DATA)
+  if (sz == 0 && !ackFrame)
     {
       NS_LOG_INFO ("Skipping empty packet (payload 0, no ACK)");
       return 0; // Abort before consuming the packet number
     }
   // We confirmed we will send a packet, increment 
   m_pnSpaces[space].m_nextTxSequence++;
+
+  // This packet carries the owed ACK, so the pending standalone one is redundant
+  if (ackFrame)
+    {
+      ClearPendingAck (space);
+    }
 
   // 6. CONGESTION CONTROL AND PACING MANAGEMENT
   if (sz < payloadMaxSize && m_txBuffer->AppSize () == 0 && m_tcb->m_bytesInFlight.Get () < m_tcb->m_cWnd)
@@ -1342,7 +1364,7 @@ QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool 
         }
     }
 
-  bool isAckOnly = ((sz == 0) && (withAck));
+  bool isAckOnly = (sz == 0 && ackFrame);
 
   // 7. FINAL ENCAPSULATION (APPEND ACK AND PADDING)
   if (ackFrame)
@@ -2332,8 +2354,7 @@ QuicSocketBase::MaybeSendMaxDataUpdate ()
   // If an ACK is already scheduled (immediate or delayed), let
   // OnSendingAckFrame() piggyback the update on that packet -- sending one
   // now too would just be a second packet moments later.
-  QuicPacketNumberSpace &pnSpace = m_pnSpaces[APPLICATION_DATA];
-  if (pnSpace.m_sendAckEvent.IsRunning () || pnSpace.m_delAckEvent.IsRunning ())
+  if (IsAckPending (APPLICATION_DATA))
     {
       return;
     }
