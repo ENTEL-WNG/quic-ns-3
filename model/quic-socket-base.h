@@ -1091,6 +1091,13 @@ protected:
   void ReceivedPacketInClosingPeriod (Ptr<Packet> p);
 
   /**
+   * \brief Check a received packet for a CONNECTION_CLOSE frame, without handling it
+   * \param p the packet, left unchanged
+   * \return true if it has one
+   */
+  bool CarriesConnectionClose (Ptr<Packet> p);
+
+  /**
    * \brief Check whether the application has closed the connection
    * \return true, setting the socket error, if no more data can be accepted
    */

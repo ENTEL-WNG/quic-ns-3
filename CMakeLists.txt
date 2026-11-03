@@ -57,4 +57,5 @@ build_lib(
     test/quic-flow-control-test.cc
     test/quic-socket-base-test.cc
     test/quic-close-test.cc
+    test/quic-handshake-test.cc
 )

@@ -360,8 +360,9 @@ Ptr<Packet> QuicSocketTxBuffer::NextCryptoSequence (
       m_sentSize += outItem->m_wireBytes;
       NoteItemSent (space, outItem);
       --m_numCryptoFramesInBuffer;
-      Ptr<Packet> toRet = outItem->m_packet;
-      return toRet;
+      // A copy: sending adds the QUIC header to it, and a retransmission of the
+      // stored packet must not carry that header in its payload
+      return outItem->m_packet->Copy ();
     }
   return 0;
 }

@@ -1917,6 +1917,19 @@ QuicSocketBase::ScheduleCloseAndSendConnectionClosePacket ()
   SendConnectionClosePacket (m_transportErrorCode, "Scheduled connection close - no error");
 }
 
+bool
+QuicSocketBase::CarriesConnectionClose (Ptr<Packet> p)
+{
+  for (const auto &frame : m_quicl5->DisgregateRecv (p->Copy ()))
+    {
+      if (frame.second.IsConnectionClose () || frame.second.IsApplicationClose ())
+        {
+          return true;
+        }
+    }
+  return false;
+}
+
 void
 QuicSocketBase::ReceivedPacketInClosingPeriod (Ptr<Packet> p)
 {
@@ -1924,14 +1937,11 @@ QuicSocketBase::ReceivedPacketInClosingPeriod (Ptr<Packet> p)
 
   // RFC 9000 Sec. 10.2.2: on a CONNECTION_CLOSE the closing state MAY become
   // draining, which sends nothing. The timer already running still ends it.
-  for (const auto &frame : m_quicl5->DisgregateRecv (p->Copy ()))
+  if (CarriesConnectionClose (p))
     {
-      if (frame.second.IsConnectionClose () || frame.second.IsApplicationClose ())
-        {
-          NS_LOG_INFO ("CONNECTION_CLOSE received while closing, now draining");
-          m_draining = true;
-          return;
-        }
+      NS_LOG_INFO ("CONNECTION_CLOSE received while closing, now draining");
+      m_draining = true;
+      return;
     }
 
   // RFC 9000 Sec. 10.2.1: resend the close, but limit the rate: respond to the
@@ -3115,19 +3125,20 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
   else if (quicHeader.IsInitial () && (m_socketState == CONNECTING_SVR || m_socketState == LISTENING))
     {
       NS_LOG_INFO ("Server receives INITIAL packet");
-      
+
+      // RFC 9000 Sec. 14.1: the limit applies to the whole datagram, and a
+      // server discards a smaller one rather than closing the connection
+      uint32_t datagramSize = p->GetSize () + quicHeader.GetSerializedSize ();
+      if (datagramSize < QuicSocketBase::MIN_INITIAL_PACKET_SIZE)
+        {
+          NS_LOG_WARN ("Discarding Initial packet that is too small (" << datagramSize << " bytes)");
+          return;
+        }
+
       // If we were LISTENING move to CONNECTING_SVR
       if (m_socketState == LISTENING)
         {
           SetState (CONNECTING_SVR);
-        }
-
-      // Check minimum initial packet size (RFC 9000 anti-amplification)
-      if (p->GetSize () < QuicSocketBase::MIN_INITIAL_PACKET_SIZE)
-        {
-          NS_LOG_WARN ("Initial packet too small (" << p->GetSize() << " bytes)");
-          AbortConnection (QuicSubheader::TransportErrorCodes_t::PROTOCOL_VIOLATION, "Initial too small");
-          return;
         }
 
       space = INITIAL_DATA;
@@ -3267,6 +3278,15 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
     }
 
   // 6. Final State Checks (Errors)
+  // A peer still in the handshake closes in a long header (RFC 9000 Sec. 10.2.3),
+  // even if this side has moved on and would otherwise ignore such a packet
+  else if ((quicHeader.IsInitial () || quicHeader.IsHandshake ()) && m_socketState == OPEN
+           && CarriesConnectionClose (p))
+    {
+      NS_LOG_INFO ("CONNECTION_CLOSE received in a long header packet");
+      EnterClosingPeriod (true);
+      return;
+    }
   else
     {
       NS_LOG_DEBUG ("Dropping unexpected packet type " << (uint32_t)quicHeader.GetTypeByte() 
