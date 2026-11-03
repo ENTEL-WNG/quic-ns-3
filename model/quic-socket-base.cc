@@ -138,6 +138,22 @@ QuicSocketBase::GetTypeId (void)
                    UintegerValue (20),
                    MakeUintegerAccessor (&QuicSocketBase::m_maxTrackedGaps),
                    MakeUintegerChecker<uint32_t> ())
+    .AddAttribute ("MaxReceivedRanges",
+                   "Maximum number of received packet number ranges remembered. A late "
+                   "packet is accepted unless it falls at or below a range forgotten "
+                   "because of this limit (RFC 9000 Sec. 13.2.3).",
+                   UintegerValue (4096),
+                   MakeUintegerAccessor (&QuicSocketBase::m_maxReceivedRanges),
+                   MakeUintegerChecker<uint32_t> (1))
+    .AddAttribute ("AckElicitingInterval",
+                   "ACK-only packets to send before adding a PING to one, at most once per "
+                   "RTT and only while old gaps are reported, so that the ACK ranges can be "
+                   "pruned (RFC 9000 Sec. 13.2.4). 0 disables it. 1 is rejected, since it "
+                   "could make every ACK-only packet ack-eliciting (RFC 9000 Sec. 13.2.1).",
+                   UintegerValue (20),
+                   MakeUintegerAccessor (&QuicSocketBase::GetAckElicitingInterval,
+                                         &QuicSocketBase::SetAckElicitingInterval),
+                   MakeUintegerChecker<uint32_t> ())
     .AddAttribute ("MaxPacketSize", "Maximum Packet Size",
                    UintegerValue (1460),
                    MakeUintegerAccessor (&QuicSocketBase::GetSegSize,
@@ -493,6 +509,8 @@ QuicSocketBase::QuicSocketBase (void)
     m_max_ack_delay (MilliSeconds (25)),
     m_initial_max_stream_id_uni (0),
     m_maxTrackedGaps (20),
+    m_maxReceivedRanges (4096),
+    m_ackElicitingInterval (20),
     // Local ACK-generation policy
     m_kMaxPacketsReceivedBeforeAckSend (2),
     // Local PTO probe content policy
@@ -578,6 +596,8 @@ QuicSocketBase::QuicSocketBase (const QuicSocketBase& sock)   // Copy constructo
     m_max_ack_delay (sock.m_max_ack_delay),
     m_initial_max_stream_id_uni (sock.m_initial_max_stream_id_uni),
     m_maxTrackedGaps (sock.m_maxTrackedGaps),
+    m_maxReceivedRanges (sock.m_maxReceivedRanges),
+    m_ackElicitingInterval (sock.m_ackElicitingInterval),
     // Local ACK-generation policy
     m_kMaxPacketsReceivedBeforeAckSend (sock.m_kMaxPacketsReceivedBeforeAckSend),
     // Local PTO probe content policy
@@ -1139,7 +1159,7 @@ QuicSocketBase::MaybeQueueAck (PacketNumberSpace space, bool isOutOfOrder)
   ++pnSpace.m_numPacketsReceivedSinceLastAckSent;
   NS_LOG_INFO ("space " << space << " numPacketsReceived " << pnSpace.m_numPacketsReceivedSinceLastAckSent << " queueAck " << pnSpace.m_queue_ack);
 
-  if (pnSpace.m_receivedPacketNumbers.empty ())
+  if (pnSpace.m_receivedRanges.IsEmpty ())
     {
       NS_LOG_INFO ("Nothing to ACK in space " << space);
       pnSpace.m_queue_ack = false;
@@ -1186,7 +1206,7 @@ bool
 QuicSocketBase::IsOutOfOrder (PacketNumberSpace space, SequenceNumber32 packetNumber)
 {
   NS_LOG_FUNCTION (this << space << packetNumber);
-  if (!m_pnSpaces[space].m_receivedPacketNumbers.empty())
+  if (!m_pnSpaces[space].m_receivedRanges.IsEmpty ())
     {
       SequenceNumber32 prevLargest = m_pnSpaces[space].m_largestReceived;
       if (packetNumber != prevLargest + 1)
@@ -1215,6 +1235,105 @@ QuicSocketBase::ClearPendingAck (PacketNumberSpace space)
   pnSpace.m_numPacketsReceivedSinceLastAckSent = 0;
 }
 
+bool
+QuicSocketBase::TrackReceivedPacket (PacketNumberSpace space, SequenceNumber32 packetNumber)
+{
+  QuicPacketNumberSpace &pnSpace = m_pnSpaces[space];
+  if (pnSpace.m_receivedRanges.IsBelowFloor (packetNumber.GetValue ()))
+    {
+      NS_LOG_INFO ("Dropping packet " << packetNumber << ": it is older than the received ranges remembered");
+      return false;
+    }
+  pnSpace.m_receivedRanges.Add (packetNumber.GetValue (), m_maxReceivedRanges);
+  pnSpace.m_largestReceived = std::max (pnSpace.m_largestReceived.GetValue (), packetNumber.GetValue ());
+  pnSpace.m_lastReceived = Simulator::Now ();
+  return true;
+}
+
+void
+QuicSocketBase::RecordSentAckFrame (PacketNumberSpace space, SequenceNumber32 packetNumber)
+{
+  // Dropping the oldest record only delays pruning until a later one is acknowledged
+  static const size_t maxSentAckFrames = 64;
+
+  QuicPacketNumberSpace &pnSpace = m_pnSpaces[space];
+  pnSpace.m_ackOnlyPacketsSinceAckEliciting = 0;
+  pnSpace.m_sentAckFrames.emplace_back (packetNumber.GetValue (), pnSpace.m_lastAckRanges);
+  if (pnSpace.m_sentAckFrames.size () > maxSentAckFrames)
+    {
+      pnSpace.m_sentAckFrames.pop_front ();
+    }
+}
+
+uint32_t
+QuicSocketBase::GetAckElicitingInterval (void) const
+{
+  return m_ackElicitingInterval;
+}
+
+void
+QuicSocketBase::SetAckElicitingInterval (uint32_t interval)
+{
+  NS_ABORT_MSG_IF (interval == 1, "AckElicitingInterval cannot be 1: an endpoint MUST NOT send an "
+                                  "ack-eliciting frame in all ACK-only packets (RFC 9000 Sec. 13.2.1)");
+  m_ackElicitingInterval = interval;
+}
+
+void
+QuicSocketBase::MaybeElicitAck (Ptr<Packet> packet, PacketNumberSpace space, SequenceNumber32 packetNumber)
+{
+  QuicPacketNumberSpace &pnSpace = m_pnSpaces[space];
+  ++pnSpace.m_ackOnlyPacketsSinceAckEliciting;
+
+  // Only worth it while ACKs repeat ranges below the newest one
+  if (space != APPLICATION_DATA || m_ackElicitingInterval == 0
+      || pnSpace.m_ackOnlyPacketsSinceAckEliciting < m_ackElicitingInterval
+      || pnSpace.m_lastAckRanges.size () < 2
+      || (pnSpace.m_lastAckElicitingAck > Seconds (0)
+          && Simulator::Now () - pnSpace.m_lastAckElicitingAck < m_tcb->m_smoothedRtt))
+    {
+      return;
+    }
+
+  QuicSubheader ping;
+  ping.SetPing ();
+  Ptr<Packet> frame = Create<Packet> ();
+  frame->AddHeader (ping);
+  packet->AddAtEnd (frame);
+
+  pnSpace.m_lastAckElicitingAck = Simulator::Now ();
+  RecordSentAckFrame (space, packetNumber);
+}
+
+void
+QuicSocketBase::PruneAckedRanges (const std::vector<QuicReceivedPacketRanges::Range> &ackedRanges,
+                                  PacketNumberSpace space)
+{
+  QuicPacketNumberSpace &pnSpace = m_pnSpaces[space];
+  auto &sent = pnSpace.m_sentAckFrames;
+
+  // RFC 9000 Sec. 13.2.4: once a packet that carried an ACK frame is
+  // acknowledged, what that frame reported needs no repeating. Only reporting
+  // stops: packets in the gaps are still accepted if they arrive late
+  for (auto record = sent.begin (); record != sent.end ();)
+    {
+      bool acked = std::any_of (ackedRanges.begin (), ackedRanges.end (),
+                                [&record] (const QuicReceivedPacketRanges::Range &r)
+                                {
+                                  return r.low <= record->first && record->first <= r.high;
+                                });
+      if (acked)
+        {
+          pnSpace.m_receivedRanges.MarkReported (record->second);
+          record = sent.erase (record);
+        }
+      else
+        {
+          ++record;
+        }
+    }
+}
+
 void
 QuicSocketBase::SendAck (PacketNumberSpace space)
 {
@@ -1223,7 +1342,7 @@ QuicSocketBase::SendAck (PacketNumberSpace space)
 
   ClearPendingAck (space);
 
-  if (pnSpace.m_receivedPacketNumbers.empty ())
+  if (pnSpace.m_receivedRanges.IsEmpty ())
     {
       return;
     }
@@ -1254,6 +1373,8 @@ QuicSocketBase::SendAck (PacketNumberSpace space)
       head = QuicHeader::CreateShort (m_connectionId, packetNumber,
                                       true, m_keyPhase);
     }
+
+  MaybeElicitAck (p, space, packetNumber);
 
   uint32_t finalSize = p->GetSize () + head.GetSerializedSize ();
   m_txBuffer->UpdateAckSent (packetNumber, finalSize, space);
@@ -1304,7 +1425,7 @@ QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool 
   uint32_t ackOverhead = 0;
   // Only piggyback an ACK that is owed: repeating one that acknowledges nothing
   // new costs payload, and its ACK Delay grows with the time since the last reception
-  if (withAck && IsAckPending (space) && !m_pnSpaces[space].m_receivedPacketNumbers.empty ())
+  if (withAck && IsAckPending (space) && !m_pnSpaces[space].m_receivedRanges.IsEmpty ())
     {
       ackFrame = OnSendingAckFrame (space);
       ackOverhead = ackFrame->GetSize ();
@@ -1392,6 +1513,14 @@ QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool 
     {
       p = p->Copy ();
       p->AddAtEnd (ackFrame);
+      if (isAckOnly)
+        {
+          MaybeElicitAck (p, space, packetNumber);
+        }
+      else
+        {
+          RecordSentAckFrame (space, packetNumber);
+        }
     }
 
   if (space == INITIAL_DATA && (p->GetSize () + head.GetSerializedSize () < MIN_INITIAL_PACKET_SIZE))
@@ -2472,47 +2601,30 @@ QuicSocketBase::OnSendingAckFrame (PacketNumberSpace space)
 {
   NS_LOG_FUNCTION (this << space);
 
-  std::vector<SequenceNumber32> &receivedPn = m_pnSpaces[space].m_receivedPacketNumbers;
-  NS_ABORT_MSG_IF (receivedPn.empty (), "No packet numbers received - cannot build ACK");
+  QuicPacketNumberSpace &pnSpace = m_pnSpaces[space];
+  NS_ABORT_MSG_IF (pnSpace.m_receivedRanges.IsEmpty (), "No packet numbers received - cannot build ACK");
 
-  std::sort(receivedPn.begin(), receivedPn.end(), std::greater<SequenceNumber32>());
+  // RFC 9000 Sec. 19.3.1: the ranges, newest first, as distances from each other.
+  // The range with the largest packet number, then what the peer is not known to
+  // have seen. Anything else is simply not acknowledged.
+  pnSpace.m_lastAckRanges = pnSpace.m_receivedRanges.GetRangesToReport (m_maxTrackedGaps + 1);
+  const std::vector<QuicReceivedPacketRanges::Range> &ranges = pnSpace.m_lastAckRanges;
+  uint32_t largestReceived = ranges.front ().high;
+  uint32_t firstAckBlock = ranges.front ().high - ranges.front ().low;
+  uint32_t smallest = ranges.front ().low;
 
-  SequenceNumber32 largestReceived = m_pnSpaces[space].m_largestReceived;
-
-  uint32_t ackBlockCount = 0;
   std::vector<uint32_t> additionalAckBlocks;
   std::vector<uint32_t> gaps;
-
-  std::vector<SequenceNumber32>::const_iterator curr_rec_it =
-    receivedPn.begin ();
-  std::vector<SequenceNumber32>::const_iterator next_rec_it =
-    receivedPn.begin () + 1;
-
-  for (; next_rec_it != receivedPn.end ();
-       ++curr_rec_it, ++next_rec_it)
+  for (auto range = ranges.begin () + 1; range != ranges.end (); ++range)
     {
-
-      if (((*curr_rec_it) - (*next_rec_it) - 1 > 0)
-          and ((*curr_rec_it) != (*next_rec_it)))
-        {
-          //std::clog << "curr " << (*curr_rec_it) << " next " << (*next_rec_it) << " ";
-          additionalAckBlocks.push_back ((*next_rec_it).GetValue ());
-          gaps.push_back ((*curr_rec_it).GetValue () - 1);
-          ackBlockCount++;
-        }
-      // Limit the number of gaps that are sent in an ACK (older packets have already been retransmitted)
-      if (ackBlockCount >= m_maxTrackedGaps)
-        {
-          break;
-        }
+      gaps.push_back (smallest - range->high - 2);
+      additionalAckBlocks.push_back (range->high - range->low);
+      smallest = range->low;
     }
-
 
   Time delay = Simulator::Now () - m_pnSpaces[space].m_lastReceived;
   uint64_t ack_delay = delay.GetMicroSeconds ();
-  QuicSubheader sub = QuicSubheader::CreateAck (
-    largestReceived.GetValue (), ack_delay, largestReceived.GetValue (),
-    gaps, additionalAckBlocks);
+  QuicSubheader sub = QuicSubheader::CreateAck (largestReceived, ack_delay, firstAckBlock, gaps, additionalAckBlocks);
 
   Ptr<Packet> ackFrame = Create<Packet> ();
   ackFrame->AddHeader (sub);
@@ -2552,16 +2664,37 @@ QuicSocketBase::OnReceivedAckFrame (QuicSubheader &sub, PacketNumberSpace space)
   uint32_t lostOut = m_txBuffer->GetLost ();
   uint32_t delivered = m_tcb->m_delivered;
 
-  std::vector<uint32_t> additionalAckBlocks = sub.GetAdditionalAckBlocks ();
-  std::vector<uint32_t> gaps = sub.GetGaps ();
   uint32_t largestAcknowledged = sub.GetLargestAcknowledged ();
   m_tcb->m_lastAckedSeq = largestAcknowledged;
-  uint32_t ackBlockCount = sub.GetAckBlockCount ();
 
-  NS_ABORT_MSG_IF (
-    ackBlockCount != additionalAckBlocks.size ()
-    and ackBlockCount != gaps.size (),
-    "Received Corrupted Ack Frame.");
+  NS_ABORT_MSG_IF (sub.GetAckBlockCount () != sub.GetAdditionalAckBlocks ().size ()
+                   or sub.GetAckBlockCount () != sub.GetGaps ().size (),
+                   "Received Corrupted Ack Frame.");
+  NS_ABORT_MSG_IF (sub.GetFirstAckBlock () > largestAcknowledged, "Received Corrupted Ack Frame.");
+
+  // Decode the ranges of RFC 9000 Sec. 19.3.1 into the absolute packet numbers
+  // that OnAckUpdate takes: the highest of each block and of each gap below it
+  std::vector<QuicReceivedPacketRanges::Range> ackedRanges;
+  ackedRanges.push_back ({static_cast<uint32_t> (largestAcknowledged - sub.GetFirstAckBlock ()), largestAcknowledged});
+  std::vector<uint32_t> additionalAckBlocks;
+  std::vector<uint32_t> gaps;
+  for (uint32_t i = 0; i < sub.GetAckBlockCount (); ++i)
+    {
+      uint32_t smallest = ackedRanges.back ().low;
+      NS_ABORT_MSG_IF (static_cast<uint64_t> (sub.GetGaps ()[i]) + sub.GetAdditionalAckBlocks ()[i] + 2 > smallest,
+                       "Received Corrupted Ack Frame.");
+      uint32_t high = smallest - sub.GetGaps ()[i] - 2;
+      gaps.push_back (smallest - 1);
+      additionalAckBlocks.push_back (high);
+      ackedRanges.push_back ({high - sub.GetAdditionalAckBlocks ()[i], high});
+    }
+  // Nothing is acknowledged below the last block either
+  if (ackedRanges.back ().low > 0)
+    {
+      gaps.push_back (ackedRanges.back ().low - 1);
+    }
+
+  PruneAckedRanges (ackedRanges, space);
 
   std::vector<Ptr<QuicSocketTxItem> > ackedPackets = m_txBuffer->OnAckUpdate (
     m_tcb, largestAcknowledged, additionalAckBlocks, gaps, space);
@@ -2963,9 +3096,10 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
           if (m_socketState == IDLE || m_socketState == CLOSING) return;
 
           // Track packet number for acknowledgement
-          m_pnSpaces[space].m_receivedPacketNumbers.push_back (currentPn);
-          m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue(), currentPn.GetValue());
-          m_pnSpaces[space].m_lastReceived = Simulator::Now ();
+          if (!TrackReceivedPacket (space, currentPn))
+            {
+              return;
+            }
           isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
         }
       else
@@ -2999,9 +3133,10 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
       isOutOfOrder = IsOutOfOrder(space, currentPn);
 
       // Track packet number for acknowledgement
-      m_pnSpaces[space].m_receivedPacketNumbers.push_back (currentPn);
-      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue(), currentPn.GetValue());
-      m_pnSpaces[space].m_lastReceived = Simulator::Now ();
+      if (!TrackReceivedPacket (space, currentPn))
+        {
+          return;
+        }
       isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
 
       if (m_socketState == IDLE || m_socketState == CLOSING) return;
@@ -3019,9 +3154,10 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
       isOutOfOrder = IsOutOfOrder(space, currentPn);
 
       // Track packet number for acknowledgement
-      m_pnSpaces[space].m_receivedPacketNumbers.push_back (currentPn);
-      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue(), currentPn.GetValue());
-      m_pnSpaces[space].m_lastReceived = Simulator::Now ();
+      if (!TrackReceivedPacket (space, currentPn))
+        {
+          return;
+        }
       isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
 
       if (m_socketState == IDLE || m_socketState == CLOSING) return;
@@ -3059,9 +3195,10 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
       isOutOfOrder = IsOutOfOrder(space, currentPn);
 
       // Track packet number for acknowledgement
-      m_pnSpaces[space].m_receivedPacketNumbers.push_back (currentPn);
-      m_pnSpaces[space].m_largestReceived = std::max (m_pnSpaces[space].m_largestReceived.GetValue(), currentPn.GetValue());
-      m_pnSpaces[space].m_lastReceived = Simulator::Now ();
+      if (!TrackReceivedPacket (space, currentPn))
+        {
+          return;
+        }
       isAckEliciting = m_quicl5->DispatchRecv (p, address, space);
     }
 

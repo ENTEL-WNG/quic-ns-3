@@ -20,6 +20,7 @@ build_lib(
     model/quic-subheader.cc
     model/quic-transport-parameters.cc
     model/quic-bbr.cc
+    model/quic-received-packet-ranges.cc
     helper/quic-helper.cc
   HEADER_FILES
     model/quic-congestion-ops.h
@@ -41,6 +42,7 @@ build_lib(
     model/quic-subheader.h
     model/quic-transport-parameters.h
     model/quic-bbr.h
+    model/quic-received-packet-ranges.h
     helper/quic-helper.h
     model/windowed-filter.h
   LIBRARIES_TO_LINK ${libinternet}

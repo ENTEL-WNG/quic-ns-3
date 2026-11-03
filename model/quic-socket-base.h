@@ -43,6 +43,9 @@
 #include "ns3/tcp-socket-base.h"
 #include "ns3/tcp-congestion-ops.h"
 #include "quic-socket-tx-scheduler.h"
+#include "quic-received-packet-ranges.h"
+
+#include <deque>
 
 namespace ns3 {
 
@@ -51,7 +54,7 @@ struct QuicPacketNumberSpace
   SequenceNumber32 m_nextTxSequence;
   SequenceNumber32 m_largestAcked;
   SequenceNumber32 m_largestReceived;
-  std::vector<SequenceNumber32> m_receivedPacketNumbers;
+  QuicReceivedPacketRanges m_receivedRanges;
   Time m_timeOfLastSentAckElicitingPacket;
   Time m_lossTime;
   Time m_lastReceived;
@@ -60,6 +63,13 @@ struct QuicPacketNumberSpace
   uint32_t m_numPacketsReceivedSinceLastAckSent;
   EventId m_sendAckEvent;
   EventId m_delAckEvent;
+  /// Ack-eliciting packets sent with an ACK frame, oldest first: their packet
+  /// number and the ranges that frame reported
+  std::deque<std::pair<uint32_t, std::vector<QuicReceivedPacketRanges::Range>>> m_sentAckFrames;
+  /// The ranges reported by the last ACK frame built
+  std::vector<QuicReceivedPacketRanges::Range> m_lastAckRanges;
+  uint32_t m_ackOnlyPacketsSinceAckEliciting;
+  Time m_lastAckElicitingAck;
   
   QuicPacketNumberSpace() : 
     m_nextTxSequence(0), 
@@ -70,7 +80,9 @@ struct QuicPacketNumberSpace
     m_lastReceived(Seconds(0)),
     m_ackElicitingOutstanding(false),
     m_queue_ack(false),
-    m_numPacketsReceivedSinceLastAckSent(0)
+    m_numPacketsReceivedSinceLastAckSent(0),
+    m_ackOnlyPacketsSinceAckEliciting(0),
+    m_lastAckElicitingAck(Seconds(0))
   {}
 };
 
@@ -247,6 +259,8 @@ class QuicSocketBase : public QuicSocket
   friend class QuicMaxDataUpdateThresholdTestCase;
   friend class QuicMaxDataRetryTimerTestCase;
   friend class QuicAckPiggybackTestCase;
+  friend class QuicAckRangesTestCase;
+  friend class QuicLatePacketTestCase;
 public:
   static const uint16_t MIN_INITIAL_PACKET_SIZE;
 
@@ -794,6 +808,22 @@ public:
   Time GetMaxAckDelay (void) const;
 
   /**
+   * \brief Set the ACK-only packets to send between PINGs added to clear old ranges
+   *
+   * 1 aborts the simulation, since RFC 9000 Sec. 13.2.1 forbids making every
+   * ACK-only packet ack-eliciting.
+   *
+   * \param interval the number of packets, or 0 to send no such PING
+   */
+  void SetAckElicitingInterval (uint32_t interval);
+
+  /**
+   * \brief Get the ACK-only packets to send between PINGs added to clear old ranges
+   * \return the number of packets, 0 if no such PING is sent
+   */
+  uint32_t GetAckElicitingInterval (void) const;
+
+  /**
    * \brief TracedCallback signature for QUIC packet transmission or reception events.
    *
    * \param [in] packet The packet.
@@ -974,6 +1004,43 @@ protected:
   void ClearPendingAck (PacketNumberSpace space);
 
   /**
+   * \brief Record a received packet number for acknowledgement
+   * \param space the packet number space
+   * \param packetNumber the packet number
+   * \return false if the packet is too old to be accepted and must be dropped
+   */
+  bool TrackReceivedPacket (PacketNumberSpace space, SequenceNumber32 packetNumber);
+
+  /**
+   * \brief Remember that an ack-eliciting packet carries an ACK frame
+   * \param space the packet number space
+   * \param packetNumber the number of the packet
+   */
+  void RecordSentAckFrame (PacketNumberSpace space, SequenceNumber32 packetNumber);
+
+  /**
+   * \brief Make an ACK-only packet ack-eliciting if it is time to
+   *
+   * ACK-only packets are never acknowledged, so a peer that only sends them
+   * would keep its old ACK ranges forever (RFC 9000 Sec. 13.2.1 and 13.2.4). The
+   * PING rides on the packet, which stays outside of loss detection: if it is
+   * lost, a later one does the job.
+   *
+   * \param packet the ACK-only packet to add the PING to
+   * \param space the packet number space
+   * \param packetNumber the number of the packet
+   */
+  void MaybeElicitAck (Ptr<Packet> packet, PacketNumberSpace space, SequenceNumber32 packetNumber);
+
+  /**
+   * \brief Discard the ACK ranges the peer is known to have received
+   * \param ackedRanges the ranges an incoming ACK frame acknowledges
+   * \param space the packet number space
+   */
+  void PruneAckedRanges (const std::vector<QuicReceivedPacketRanges::Range> &ackedRanges,
+                         PacketNumberSpace space);
+
+  /**
    * \brief Send an ACK packet
    */
   void SendAck ();
@@ -1069,6 +1136,8 @@ protected:
   Time m_max_ack_delay;                  //!< The maximum ack delay we promise to the peer (RFC 9000 18.2); purely local ACK-sending policy, not congestion-control state
   uint32_t m_initial_max_stream_id_uni;  //!< The initial maximum number of application-owned unidirectional streams the peer may initiate
   uint32_t m_maxTrackedGaps;             //!< The maximum number of gaps in an ACK
+  uint32_t m_maxReceivedRanges;          //!< The most received ranges remembered, to accept late packets
+  uint32_t m_ackElicitingInterval;       //!< ACK-only packets between PINGs when there are old ranges to clear; 0 disables them, 1 is not allowed
 
   // Local ACK-generation policy (RFC 9000 13.2.2); not negotiated with the peer
   uint32_t m_kMaxPacketsReceivedBeforeAckSend;  //!< Send an ACK after this many received ack-eliciting packets, even if the delayed-ack timer has not fired yet
