@@ -28,6 +28,8 @@ struct QuicHandshakeScenario
   int dropAtClient;     //!< index of the packet the client's link drops; negative for none
   QuicSocketBase::PtoProbeMode probeMode;
   Time serverAbort;     //!< when the server aborts, from the start; negative for never
+  bool zeroRtt = false; //!< whether the client writes its data in 0-RTT
+  bool serverOpens = true; //!< whether the server should finish the handshake
 };
 
 class QuicHandshakeTestCase : public TestCase
@@ -46,11 +48,13 @@ private:
   void OnAccepted (Ptr<Socket> socket, const Address &from);
   void OnServerRecv (Ptr<Socket> socket);
   void AbortServer ();
+  void OnRetransmit (uint32_t packets, uint32_t bytes, uint8_t reason);
 
   QuicHandshakeScenario m_scenario;
   Ptr<QuicSocketBase> m_server;
   uint32_t m_written {0};
   uint32_t m_received {0};
+  uint32_t m_lossRetransmissions {0};
   const uint32_t m_dataBytes {20000};
 };
 
@@ -97,9 +101,19 @@ QuicHandshakeTestCase::AbortServer ()
 }
 
 void
+QuicHandshakeTestCase::OnRetransmit (uint32_t packets, uint32_t bytes, uint8_t reason)
+{
+  if (reason == QuicSocketBase::RETRANSMIT_LOSS)
+    {
+      m_lossRetransmissions += packets;
+    }
+}
+
+void
 QuicHandshakeTestCase::DoRun (void)
 {
   Config::SetDefault ("ns3::QuicSocketBase::PtoProbeMode", EnumValue (m_scenario.probeMode));
+  Config::SetDefault ("ns3::QuicL4Protocol::0RTT-Handshake", BooleanValue (m_scenario.zeroRtt));
   RngSeedManager::SetSeed (1);
   RngSeedManager::SetRun (1);
 
@@ -142,6 +156,7 @@ QuicHandshakeTestCase::DoRun (void)
   client->SetConnectCallback (MakeCallback (&QuicHandshakeTestCase::OnConnected, this),
                               MakeNullCallback<void, Ptr<Socket>> ());
   client->SetSendCallback (MakeCallback (&QuicHandshakeTestCase::OnSendReady, this));
+  client->TraceConnectWithoutContext ("Retransmit", MakeCallback (&QuicHandshakeTestCase::OnRetransmit, this));
   client->Bind ();
   client->Connect (InetSocketAddress (interfaces.GetAddress (1), port));
 
@@ -162,12 +177,20 @@ QuicHandshakeTestCase::DoRun (void)
   else
     {
       NS_TEST_EXPECT_MSG_EQ (client->GetSocketState (), QuicSocket::OPEN, "The client should be connected");
-      NS_TEST_EXPECT_MSG_EQ (m_server->GetSocketState (), QuicSocket::OPEN, "The server should be connected");
+      if (m_scenario.serverOpens)
+        {
+          NS_TEST_EXPECT_MSG_EQ (m_server->GetSocketState (), QuicSocket::OPEN, "The server should be connected");
+        }
       NS_TEST_EXPECT_MSG_EQ (m_received, m_dataBytes, "All the data should arrive");
+      if (m_scenario.zeroRtt)
+        {
+          NS_TEST_EXPECT_MSG_EQ (m_lossRetransmissions, 0, "Nothing is lost on a lossless path");
+        }
     }
 
   Simulator::Destroy ();
   m_server = nullptr;
+  Config::SetDefault ("ns3::QuicL4Protocol::0RTT-Handshake", BooleanValue (false));
 }
 
 class QuicHandshakeTestSuite : public TestSuite
@@ -191,6 +214,14 @@ public:
     AddTestCase (new QuicHandshakeTestCase ({"server's first packet lost", MilliSeconds (10), -1, 0, newData, never}), TestCase::QUICK);
     AddTestCase (new QuicHandshakeTestCase ({"server's second packet lost", MilliSeconds (10), -1, 1, newData, never}), TestCase::QUICK);
     AddTestCase (new QuicHandshakeTestCase ({"close during the handshake", MilliSeconds (500), -1, -1, newData, Seconds (1.3)}), TestCase::QUICK);
+    // The data does not fit the first flight, so the client still has some to send
+    // when the handshake completes and the discarded Initial frees part of the window
+    AddTestCase (new QuicHandshakeTestCase ({"0-RTT, short path", MilliSeconds (10), -1, -1, newData, never, true}), TestCase::QUICK);
+    AddTestCase (new QuicHandshakeTestCase ({"0-RTT, long RTT", MilliSeconds (600), -1, -1, newData, never, true}), TestCase::QUICK);
+    AddTestCase (new QuicHandshakeTestCase ({"0-RTT, very long RTT", Seconds (5), -1, -1, newData, never, true}), TestCase::QUICK);
+    // The client's only Handshake packet is its second one. Its data must get through
+    // without it, although nothing yet recovers the server's handshake
+    AddTestCase (new QuicHandshakeTestCase ({"client's Handshake ACK lost", MilliSeconds (10), 1, -1, newData, never, false, false}), TestCase::QUICK);
   }
 };
 

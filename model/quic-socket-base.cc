@@ -3061,6 +3061,7 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
   bool unsupportedVersion = false;
   PacketNumberSpace space = APPLICATION_DATA;
   bool isOutOfOrder = false;
+  bool flushAfterAck = false;
 
   // 1. Handle 0-RTT packets (Early Data)
   // RFC 9000: Servers must be able to process 0-RTT packets during or even before the handshake
@@ -3186,21 +3187,28 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
       m_txBuffer->DiscardSpace (INITIAL_DATA);
       m_pnSpaces[INITIAL_DATA].m_ackElicitingOutstanding = false;
 
-      if (m_socketState == CONNECTING_CLT) 
+      // Flush the data that was waiting for the handshake. A client waits for the
+      // ACK queued in step 7: it is what completes the server's handshake, so it goes
+      // ahead of any 1-RTT data, as in RFC 9000 Figure 6
+      if (m_quicl4->IsServer ())
         {
-          // Clients might need to send a final Handshake packet or ACK
-          SendInitialHandshake (QuicHeader::HANDSHAKE, quicHeader, p);
-        }
-      else 
-        {
-          // Servers can now flush any data that was pending Handshake confirmation
           SendPendingData (true);
+        }
+      else
+        {
+          flushAfterAck = true;
         }
     }
 
   // 4. Handle SHORT packets (Standard 1-RTT application data)
-  // A socket flushing on close still needs ACKs to get its data out
-  else if (quicHeader.IsShort () && (m_socketState == OPEN || (m_socketState == CLOSING && m_closeOnEmpty)))
+  // A socket flushing on close still needs ACKs to get its data out.
+  // CONNECTING_SVR is a deliberate deviation from RFC 9001 Sec. 5.7, under which a
+  // server must not process 1-RTT packets before the handshake completes, and may
+  // store them until then. Such a packet appears when the ACK that completes this
+  // handshake is reordered or lost. With no encryption there are no keys to wait for,
+  // so it is processed at once, like the 0-RTT data above
+  else if (quicHeader.IsShort () && (m_socketState == OPEN || m_socketState == CONNECTING_SVR
+                                     || (m_socketState == CLOSING && m_closeOnEmpty)))
     {
       NS_LOG_INFO ("Received SHORT packet in state " << QuicStateName[m_socketState]);
       space = APPLICATION_DATA;
@@ -3310,6 +3318,12 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
   else if (isAckEliciting == 0)
     {
       NS_LOG_INFO ("Received non-ack-eliciting packet (ACK-only), no further action needed");
+    }
+
+  // Scheduled after that ACK, so it runs after it at this same instant
+  if (flushAfterAck)
+    {
+      Simulator::ScheduleNow (&QuicSocketBase::SendPendingData, this, true);
     }
 }
 
