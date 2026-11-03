@@ -1495,7 +1495,9 @@ QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool 
 
   if (m_tcb->m_pacing)
     {
-      if (m_pacingTimer.IsExpired ())
+      // A packet without payload neither consumes nor waits on pacing: a zero
+      // delay would call back into SendPendingData at the same simulated time
+      if (sz > 0 && m_pacingTimer.IsExpired ())
         {
           Time pacingDelay = Seconds (0);
           if (m_tcb->m_pacingRate.Get ().GetBitRate () > 0)

@@ -379,15 +379,16 @@ QuicAckPiggybackTestCase::DoRun (void)
   NS_TEST_ASSERT_MSG_EQ (m_txPackets, txBefore, "An empty packet should not be emitted");
   NS_TEST_ASSERT_MSG_EQ (pnSpace.m_nextTxSequence, pnBefore, "The packet number should not be consumed");
   NS_TEST_ASSERT_MSG_EQ (m_socket->m_pacingTimer.IsRunning (), false, "No pacing timer should be armed");
-  m_socket->m_tcb->m_pacing = false;
 
-  // No payload but an owed ACK: an ACK-only packet, outside bytes in flight
+  // No payload but an owed ACK: an ACK-only packet, outside bytes in flight and pacing
   m_socket->MaybeQueueAck (APPLICATION_DATA, false);
   uint32_t inFlightBefore = m_socket->m_txBuffer->BytesInFlight ();
   m_socket->SendDataPacket (APPLICATION_DATA, segSize, true);
   NS_TEST_ASSERT_MSG_EQ (m_txPackets, txBefore + 1, "An ACK-only packet should be sent");
   NS_TEST_ASSERT_MSG_EQ (m_lastHasAck, true, "The packet should carry the ACK");
   NS_TEST_ASSERT_MSG_EQ (m_lastHasStream, false, "The packet should carry no STREAM frame");
+  NS_TEST_ASSERT_MSG_EQ (m_socket->m_pacingTimer.IsRunning (), false, "An ACK-only packet should arm no pacing timer");
+  m_socket->m_tcb->m_pacing = false;
   NS_TEST_ASSERT_MSG_EQ (m_socket->IsAckPending (APPLICATION_DATA), false, "The ACK-only packet satisfies the ACK");
   NS_TEST_ASSERT_MSG_EQ (m_socket->m_txBuffer->BytesInFlight (), inFlightBefore,
                          "An ACK-only packet does not count towards bytes in flight");
