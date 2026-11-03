@@ -503,9 +503,10 @@ QuicSocketBase::QuicSocketBase (void)
     m_idleTimeoutEvent (),
     m_drainingPeriodEvent (),
     m_maxDataRetryEvent (),
-    m_drainingPeriodTimeout (Seconds (90.0)),
     m_flushOnClose (false),
     m_closeOnEmpty (false),
+    m_draining (false),
+    m_closingPacketsReceived (0),
     // Congestion Control
     m_tcb (CreateObject<QuicSocketState> ()),
     m_congestionControl (CreateObject<QuicCongestionOps> ()),
@@ -587,9 +588,10 @@ QuicSocketBase::QuicSocketBase (const QuicSocketBase& sock)   // Copy constructo
     m_idleTimeoutEvent (),
     m_drainingPeriodEvent (),
     m_maxDataRetryEvent (),
-    m_drainingPeriodTimeout (sock.m_drainingPeriodTimeout),
     m_flushOnClose (sock.m_flushOnClose),
     m_closeOnEmpty (sock.m_closeOnEmpty),
+    m_draining (sock.m_draining),
+    m_closingPacketsReceived (sock.m_closingPacketsReceived),
     // Congestion Control
     m_tcb (CopyObject (sock.m_tcb)),
     m_congestionControl (nullptr),
@@ -932,16 +934,27 @@ QuicSocketBase::Connect (const Address & address)
 }
 
 /* Inherit from Socket class: Invoked by upper-layer application */
+bool
+QuicSocketBase::IsClosedForSending ()
+{
+  if (m_socketState != CLOSING && m_socketState != IDLE)
+    {
+      return false;
+    }
+  NS_LOG_INFO ("Socket in state " << QuicStateName[m_socketState] << ", cannot accept data");
+  m_errno = ERROR_SHUTDOWN;
+  return true;
+}
+
 int
 QuicSocketBase::Send (Ptr<Packet> p, uint32_t flags)
 {
   NS_LOG_FUNCTION (this << flags);
   int data = 0;
 
-  if (m_drainingPeriodEvent.IsRunning ())
+  if (IsClosedForSending ())
     {
-      NS_LOG_INFO ("Socket in draining state, cannot send packets");
-      return 0;
+      return -1;
     }
 
   if (flags == 0)
@@ -960,10 +973,9 @@ QuicSocketBase::Send (Ptr<Packet> p)
 {
   NS_LOG_FUNCTION (this);
 
-  if (m_drainingPeriodEvent.IsRunning ())
+  if (IsClosedForSending ())
     {
-      NS_LOG_INFO ("Socket in draining state, cannot send packets");
-      return 0;
+      return -1;
     }
 
   int data = m_quicl5->DispatchSend (p);
@@ -1009,10 +1021,19 @@ QuicSocketBase::SendPendingData (bool withAck)
 
   if (m_txBuffer->AppSize () == 0)
     {
-      if (m_closeOnEmpty)
+      // Data a full socket buffer rejected stays in its stream, and otherwise
+      // only the application writing again would make the stream retry it
+      if (m_quicl5 && m_quicl5->HasBufferedStreamData () && !m_drainingPeriodEvent.IsRunning ())
         {
-          m_drainingPeriodEvent.Cancel ();
-          SendConnectionClosePacket (0, "Scheduled connection close - no error");
+          m_quicl5->SendBufferedStreamData ();
+          return 0;
+        }
+
+      // Wait for the flushed data to be acknowledged too: nothing can recover
+      // a lost packet once CONNECTION_CLOSE has gone out
+      if (m_closeOnEmpty && m_txBuffer->BytesInFlight () == 0)
+        {
+          ScheduleCloseAndSendConnectionClosePacket ();
         }
       NS_LOG_INFO ("Nothing to send");
       return 0;
@@ -1271,7 +1292,7 @@ QuicSocketBase::SendDataPacket (PacketNumberSpace space, uint32_t maxSize, bool 
     {
       if (m_socketState == CONNECTING_CLT && !m_connected && m_quicl4->Is0RTTHandshakeAllowed ())
         head = QuicHeader::Create0RTT (m_connectionId, m_vers, packetNumber);
-      else if (m_socketState == OPEN || m_socketState == CONNECTING_SVR)
+      else if (m_socketState == OPEN || m_socketState == CONNECTING_SVR || m_closeOnEmpty)
         head = QuicHeader::CreateShort (m_connectionId, packetNumber, true, m_keyPhase);
       else
         NS_LOG_WARN ("Trying to send APPLICATION_DATA in an invalid state: " << QuicStateName[m_socketState]);
@@ -1417,6 +1438,11 @@ void
 QuicSocketBase::SetReTxTimeout ()
 {
   NS_LOG_FUNCTION (this);
+
+  if (m_drainingPeriodEvent.IsRunning ())
+    {
+      return;
+    }
 
   Ptr<QuicSocketState> tcbd = m_tcb;
   Time now = Simulator::Now ();
@@ -1710,13 +1736,80 @@ QuicSocketBase::RecvFrom (uint32_t maxSize, uint32_t flags,
   return packet;
 }
 
+Time
+QuicSocketBase::GetClosingPeriod () const
+{
+  // RFC 9000 Sec. 10.2: at least three times the current PTO
+  Time pto = m_tcb->m_smoothedRtt + std::max (4 * m_tcb->m_rttVar, m_tcb->m_kGranularity)
+             + m_tcb->m_peerMaxAckDelay;
+  return 3 * pto;
+}
+
+void
+QuicSocketBase::EnterClosingPeriod (bool draining)
+{
+  NS_LOG_FUNCTION (this << draining);
+
+  if (m_socketState != CLOSING)
+    {
+      SetState (CLOSING);
+    }
+  m_closeOnEmpty = false;
+  m_draining = draining;
+  m_closingPacketsReceived = 0;
+
+  CancelConnectionTimers ();
+
+  Time period = GetClosingPeriod ();
+  NS_LOG_LOGIC (this << " Schedule DoClose at time " << (Simulator::Now () + period).GetSeconds ());
+  m_drainingPeriodEvent.Cancel ();
+  m_drainingPeriodEvent = Simulator::Schedule (period, &QuicSocketBase::DoClose, this);
+}
+
+void
+QuicSocketBase::CancelConnectionTimers ()
+{
+  for (int i = 0; i < 3; i++)
+    {
+      ClearPendingAck (static_cast<PacketNumberSpace> (i));
+    }
+  m_tcb->m_lossDetectionAlarm.Cancel ();
+  m_pacingTimer.Cancel ();
+  m_maxDataRetryEvent.Cancel ();
+  m_idleTimeoutEvent.Cancel ();
+}
+
 void
 QuicSocketBase::ScheduleCloseAndSendConnectionClosePacket ()
 {
-  m_drainingPeriodEvent.Cancel ();
-  NS_LOG_LOGIC (this << " Close Schedule DoClose at time " << Simulator::Now ().GetSeconds () << " to expire at time " << (Simulator::Now () + m_drainingPeriodTimeout.Get ()).GetSeconds ());
-  m_drainingPeriodEvent = Simulator::Schedule (m_drainingPeriodTimeout, &QuicSocketBase::DoClose, this);
-  SendConnectionClosePacket (0, "Scheduled connection close - no error");
+  EnterClosingPeriod (false);
+  SendConnectionClosePacket (m_transportErrorCode, "Scheduled connection close - no error");
+}
+
+void
+QuicSocketBase::ReceivedPacketInClosingPeriod (Ptr<Packet> p)
+{
+  NS_LOG_FUNCTION (this);
+
+  // RFC 9000 Sec. 10.2.2: on a CONNECTION_CLOSE the closing state MAY become
+  // draining, which sends nothing. The timer already running still ends it.
+  for (const auto &frame : m_quicl5->DisgregateRecv (p->Copy ()))
+    {
+      if (frame.second.IsConnectionClose () || frame.second.IsApplicationClose ())
+        {
+          NS_LOG_INFO ("CONNECTION_CLOSE received while closing, now draining");
+          m_draining = true;
+          return;
+        }
+    }
+
+  // RFC 9000 Sec. 10.2.1: resend the close, but limit the rate: respond to the
+  // 1st, 2nd, 4th, 8th... packet, so the responses decay as packets keep coming
+  ++m_closingPacketsReceived;
+  if ((m_closingPacketsReceived & (m_closingPacketsReceived - 1)) == 0)
+    {
+      SendConnectionClosePacket (m_transportErrorCode, "Connection closing");
+    }
 }
 
 
@@ -1731,26 +1824,30 @@ QuicSocketBase::Close (void)
   if (m_idleTimeoutEvent.IsRunning () and m_socketState != IDLE
       and m_socketState != CLOSING)   //Connection Close from application signal
     {
-      SetState (CLOSING);
-      if (m_flushOnClose)
+      // There is nothing to flush to a peer the handshake has not reached
+      if (m_flushOnClose && m_connected)
         {
+          SetState (CLOSING);
           m_closeOnEmpty = true;
+          // Closes right away if there is nothing to flush; no later event
+          // would otherwise do it
+          SendPendingData (m_connected);
         }
       else
         {
           ScheduleCloseAndSendConnectionClosePacket ();
         }
     }
+  else if (m_idleTimeoutEvent.IsExpired () and m_socketState == CLOSING
+           and m_drainingPeriodEvent.IsExpired ()) //Idle Period termination during a flush: give up on it
+    {
+      EnterClosingPeriod (true);
+    }
   else if (m_idleTimeoutEvent.IsExpired () and m_socketState != CLOSING
            and m_socketState != IDLE and m_socketState != LISTENING) //Connection Close due to Idle Period termination
     {
-      SetState (CLOSING);
-      m_drainingPeriodEvent.Cancel ();
-      NS_LOG_LOGIC (
-        this << " Close Schedule DoClose at time " << Simulator::Now ().GetSeconds () << " to expire at time " << (Simulator::Now () + m_drainingPeriodTimeout.Get ()).GetSeconds ());
-      m_drainingPeriodEvent = Simulator::Schedule (m_drainingPeriodTimeout,
-                                                   &QuicSocketBase::DoClose,
-                                                   this);
+      // RFC 9000 Sec. 10.1: an idle timeout closes silently
+      EnterClosingPeriod (true);
     }
   else if (m_idleTimeoutEvent.IsExpired ()
            and m_drainingPeriodEvent.IsExpired () and m_socketState != CLOSING
@@ -2171,12 +2268,12 @@ QuicSocketBase::OnReceivedFrame (Ptr<Packet> p, QuicSubheader &sub, PacketNumber
   else if (sub.GetFrameType () == QuicSubheader::CONNECTION_CLOSE)
     {
       NS_LOG_INFO ("Received CONNECTION_CLOSE frame");
-      Close ();
+      EnterClosingPeriod (true);
     }
   else if (sub.GetFrameType () == QuicSubheader::APPLICATION_CLOSE)
     {
       NS_LOG_INFO ("Received APPLICATION_CLOSE frame");
-      DoClose ();
+      EnterClosingPeriod (true);
     }
   else if (sub.GetFrameType () == QuicSubheader::PADDING)
     {
@@ -2345,6 +2442,11 @@ QuicSocketBase::MaxDataRetryExpired ()
 void
 QuicSocketBase::MaybeSendMaxDataUpdate ()
 {
+  if (m_socketState != OPEN)
+    {
+      return;
+    }
+
   uint64_t newMaxData;
   if (!MaxDataUpdateDue (newMaxData, false))
     {
@@ -2779,7 +2881,7 @@ QuicSocketBase::DoClose (void)
       SetState (IDLE);
     }
 
-  m_maxDataRetryEvent.Cancel ();
+  CancelConnectionTimers ();
   SetRecvCallback (MakeNullCallback<void, Ptr<Socket> > ());
   return m_quicl4->RemoveSocket (this);
 }
@@ -2801,9 +2903,12 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
       m_idleTimeoutEvent.Cancel ();   // Reset the IDLE timeout
       m_idleTimeoutEvent = Simulator::Schedule (m_idleTimeout, &QuicSocketBase::Close, this);
     }
-  else   // If the socket is in Draining Period, discard all incoming packets
+  else   // Closing or draining: nothing is processed any more
     {
-      NS_LOG_WARN ("QUIC Socket in draining period, discarding packet");
+      if (!m_draining)
+        {
+          ReceivedPacketInClosingPeriod (p);
+        }
       return;
     }
 
@@ -2945,9 +3050,10 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
     }
 
   // 4. Handle SHORT packets (Standard 1-RTT application data)
-  else if (quicHeader.IsShort () && m_socketState == OPEN)
+  // A socket flushing on close still needs ACKs to get its data out
+  else if (quicHeader.IsShort () && (m_socketState == OPEN || (m_socketState == CLOSING && m_closeOnEmpty)))
     {
-      NS_LOG_INFO ("Received SHORT packet while in OPEN state");
+      NS_LOG_INFO ("Received SHORT packet in state " << QuicStateName[m_socketState]);
       space = APPLICATION_DATA;
       SequenceNumber32 currentPn = quicHeader.GetPacketNumber();
       isOutOfOrder = IsOutOfOrder(space, currentPn);
@@ -3021,16 +3127,17 @@ QuicSocketBase::ReceivedData (Ptr<Packet> p, const QuicHeader& quicHeader,
       return; 
     }
 
-  // 6. Final State Checks (Closing and Errors)
-  else if (m_socketState == CLOSING)
-    {
-      NS_LOG_INFO ("Packet received during CLOSING state, aborting connection");
-      AbortConnection (m_transportErrorCode, "Received packet in Closing state");
-    }
+  // 6. Final State Checks (Errors)
   else
     {
       NS_LOG_DEBUG ("Dropping unexpected packet type " << (uint32_t)quicHeader.GetTypeByte() 
                     << " in current state " << QuicStateName[m_socketState]);
+      return;
+    }
+
+  // The frames just handled may have closed the connection
+  if (m_drainingPeriodEvent.IsRunning ())
+    {
       return;
     }
 
@@ -3131,6 +3238,12 @@ QuicSocketBase::AbortConnection (uint16_t transportErrorCode,
 {
   NS_LOG_FUNCTION (this);
 
+  if (m_drainingPeriodEvent.IsRunning ())
+    {
+      NS_LOG_INFO ("Connection already closing, not aborting it");
+      return;
+    }
+
   NS_LOG_INFO (
     "Abort connection " << transportErrorCode << " because " << reasonPhrase);
 
@@ -3196,7 +3309,8 @@ QuicSocketBase::AbortConnection (uint16_t transportErrorCode,
   m_txTrace (packet, quicHeader, this);
   NotifyDataSent (sz);
 
-  Close ();
+  // An error ends the connection at once, with no flush of pending data
+  EnterClosingPeriod (false);
 }
 
 bool

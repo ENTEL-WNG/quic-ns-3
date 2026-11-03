@@ -163,6 +163,18 @@ public:
   std::vector< std::pair<Ptr<Packet>, QuicSubheader> > DisgregateRecv (Ptr<Packet> data);
 
   /**
+   * \brief Check for application data that has not reached the socket yet
+   *
+   * \return true if a stream still holds buffered data to send
+   */
+  bool HasBufferedStreamData () const;
+
+  /**
+   * \brief Retry sending the data buffered in the streams to the socket
+   */
+  void SendBufferedStreamData ();
+
+  /**
    * \brief get the stream associated to the ID
    *
    * \param streamId the ID of the stream

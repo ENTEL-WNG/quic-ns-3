@@ -408,6 +408,28 @@ QuicL5Protocol::DisgregateRecv (Ptr<Packet> data)
   return disgregated;
 }
 
+bool
+QuicL5Protocol::HasBufferedStreamData () const
+{
+  for (const auto &stream : m_streams)
+    {
+      if (stream->GetStreamTxBufferedSize () > 0)
+        {
+          return true;
+        }
+    }
+  return false;
+}
+
+void
+QuicL5Protocol::SendBufferedStreamData ()
+{
+  for (const auto &stream : m_streams)
+    {
+      stream->SendPendingData ();
+    }
+}
+
 Ptr<QuicStreamBase>
 QuicL5Protocol::SearchStream (uint64_t streamId)
 {

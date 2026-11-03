@@ -54,4 +54,5 @@ build_lib(
     test/quic-congestion-ops-test.cc
     test/quic-flow-control-test.cc
     test/quic-socket-base-test.cc
+    test/quic-close-test.cc
 )

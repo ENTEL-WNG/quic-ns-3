@@ -177,6 +177,12 @@ QuicStreamBase::GetStreamTxAvailable () const
 
 
 uint32_t
+QuicStreamBase::GetStreamTxBufferedSize (void) const
+{
+  return m_txBuffer->AppSize ();
+}
+
+uint32_t
 QuicStreamBase::SendPendingData (void)
 {
   NS_LOG_FUNCTION (this);

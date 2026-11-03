@@ -511,6 +511,13 @@ QuicL4Protocol::ForwardUp (Ptr<Socket> sock)
       // RFC 9000 Section 7.1: New connections are only created via Initial packets
       if (header.IsInitial () && m_isServer && !socket)
         {
+          // A closed listener takes no new connections; the sockets of past
+          // ones may be gone too, so the front binding is not always a listener
+          if (m_quicUdpBindingList.empty () || !m_quicUdpBindingList.front ()->m_listenerBinding)
+            {
+              NS_LOG_WARN ("Discarding INITIAL packet: no listening socket.");
+              continue;
+            }
           socket = CloneSocket (m_quicUdpBindingList.front ()->m_quicSocket);
           socket->SetConnectionId (connectionId);
           socket->Connect (from);
@@ -534,6 +541,12 @@ QuicL4Protocol::ForwardUp (Ptr<Socket> sock)
           if (result == m_authAddresses.end () && !m_0RTTHandshakeStart)
             {
               NS_LOG_WARN ("Discarding unauthenticated 0-RTT packet.");
+              continue;
+            }
+
+          if (m_quicUdpBindingList.empty () || !m_quicUdpBindingList.front ()->m_listenerBinding)
+            {
+              NS_LOG_WARN ("Discarding 0-RTT packet: no listening socket.");
               continue;
             }
 

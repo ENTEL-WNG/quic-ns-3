@@ -196,6 +196,13 @@ public:
   uint32_t GetStreamTxAvailable (void) const;
 
   /**
+   * \brief Get the amount of data buffered in this stream and not sent to the socket yet
+   *
+   * \return the size in bytes
+   */
+  uint32_t GetStreamTxBufferedSize (void) const;
+
+  /**
    * \brief Get the stream RX buffer.
    * \returns a smart pointer to the Rx buffer
    */

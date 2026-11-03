@@ -999,6 +999,36 @@ protected:
    */
   void ScheduleCloseAndSendConnectionClosePacket ();
 
+  /**
+   * \brief Get the length of the closing and draining periods (RFC 9000 Sec. 10.2)
+   * \return three times the PTO
+   */
+  Time GetClosingPeriod () const;
+
+  /**
+   * \brief Stop all connection activity and schedule the DoClose method
+   * \param draining true for a draining period, which sends nothing; false
+   *        for a closing period, which answers packets with CONNECTION_CLOSE
+   */
+  void EnterClosingPeriod (bool draining);
+
+  /**
+   * \brief Cancel every timer that could make the socket send
+   */
+  void CancelConnectionTimers ();
+
+  /**
+   * \brief Handle a packet received in the closing period
+   * \param p the packet
+   */
+  void ReceivedPacketInClosingPeriod (Ptr<Packet> p);
+
+  /**
+   * \brief Check whether the application has closed the connection
+   * \return true, setting the socket error, if no more data can be accepted
+   */
+  bool IsClosedForSending ();
+
   // Connections to other layers of the Stack
   Ipv4EndPoint* m_endPoint;      //!< the IPv4 endpoint
   Ipv6EndPoint* m_endPoint6;     //!< the IPv6 endpoint
@@ -1051,11 +1081,12 @@ protected:
 
   // Timers and Events
   EventId m_idleTimeoutEvent;                 //!< Event triggered upon receiving or sending a packet, when it expires the connection closes
-  EventId m_drainingPeriodEvent;              //!< Event triggered upon idle timeout or immediate connection close, when it expires all closes
+  EventId m_drainingPeriodEvent;              //!< Runs for the closing or draining period (see m_draining): when it expires all closes
   EventId m_maxDataRetryEvent;                 //!< Safety-net timer: re-advertises our last MAX_DATA value in case the packet that carried it (an ACK we piggybacked it on, which is not itself loss-tracked) was lost
-  TracedValue<Time> m_drainingPeriodTimeout;  //!< Draining Period timeout
   bool m_flushOnClose;                        //!< Control behavior on connection close
-  bool m_closeOnEmpty;                        //!< True if the socket will close after sending the buffered packets
+  bool m_closeOnEmpty;                        //!< True while flushing: the socket closes once the buffered packets are sent and acknowledged
+  bool m_draining;                            //!< True if m_drainingPeriodEvent is a draining period (send nothing), false if a closing one (RFC 9000 Sec. 10.2)
+  uint32_t m_closingPacketsReceived;          //!< Packets received in the closing period, to rate-limit the responses
 
   // Congestion Control
   Ptr<QuicSocketState> m_tcb;                     //!< Congestion control informations
